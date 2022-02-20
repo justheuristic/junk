@@ -4,13 +4,13 @@ train_file: ['/mnt/vol_b/data/coco2014/coco_karpathy_train.json',
 laion_path: ''   
 
 # size of vit model; base or large
-vit: 'base'
+vit: 'large'
 vit_grad_ckpt: True
 vit_ckpt_layer: 999999
 bert_grad_ckpt: True
 
 image_size: 224
-batch_size: 240
+batch_size: 75
 
 queue_size: 57600
 alpha: 0.4
