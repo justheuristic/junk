@@ -4,7 +4,7 @@ train_file: ['/mnt/vol_b/data/coco2014/coco_karpathy_train.json',
 laion_path: ''   
 
 # size of vit model; base or large
-vit: 'large'
+vit: 'base'
 vit_grad_ckpt: True
 vit_ckpt_layer: 999999
 bert_grad_ckpt: True
@@ -17,7 +17,7 @@ alpha: 0.4
 
 # optimizer
 weight_decay: 0.05
-init_lr: 3e-4
+init_lr: 1e-4
 min_lr: 1e-6
 warmup_lr: 1e-6
 lr_decay_rate: 0.9
