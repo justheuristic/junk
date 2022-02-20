@@ -341,7 +341,7 @@ def main():
     if args.multinode:
         # we assume slurm setup but this should be easily extendable to other setups
         ngpus_per_node = torch.cuda.device_count()
-        args.rank = int(os.environ["SLURM_PROCID"]) if args.rank is not None else args.rank
+        args.rank = int(os.environ["SLURM_PROCID"]) if args.rank is None else args.rank
         args.world_size = int(os.environ["WORLD_SIZE"])
         os.environ['RANK'] = str(args.rank)
 
