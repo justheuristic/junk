@@ -38,7 +38,7 @@ def train(model, data_loader, optimizer, epoch, device, config):
     metric_logger.add_meter('loss_lm', utils.SmoothedValue(window_size=50, fmt='{value:.4f}'))
     
     header = 'Train Epoch: [{}]'.format(epoch)
-    print_freq = 50   
+    print_freq = 1#50   
 
     if config['laion_path']:
         data_loader.dataset.reload_laion(epoch)
@@ -101,7 +101,7 @@ def main(args, config):
     #### Model #### 
     print("Creating model")
     model = blip_pretrain(image_size=config['image_size'], vit=config['vit'], vit_grad_ckpt=config['vit_grad_ckpt'], 
-                            vit_ckpt_layer=config['vit_ckpt_layer'], queue_size=config['queue_size'])
+                            vit_ckpt_layer=config['vit_ckpt_layer'], bert_grad_ckpt=config['bert_grad_ckpt'], queue_size=config['queue_size'])
 
     model = model.to(device)   
 
@@ -120,6 +120,7 @@ def main(args, config):
     model_without_ddp = model
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+        model._set_static_graph()
         model_without_ddp = model.module    
         
     print("Start training")

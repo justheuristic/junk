@@ -49,6 +49,17 @@ from transformers.models.bert.configuration_bert import BertConfig
 logger = logging.get_logger(__name__)
 
 
+class GradientCheckpointingMixin:
+    """A mix-in that enables gradient checkpoints in a huggingface model. See albert.py for usage examples."""
+
+    supports_gradient_checkpointing: bool = True
+
+    def _set_gradient_checkpointing(self, module: nn.Module, value: bool):
+        if isinstance(module, BertEncoder):
+            assert hasattr(module, 'gradient_checkpointing')
+            module.gradient_checkpointing = value
+
+
 class BertEmbeddings(nn.Module):
     """Construct the embeddings from word and position embeddings."""
 
@@ -383,7 +394,7 @@ class BertLayer(nn.Module):
         return layer_output
 
 
-class BertEncoder(nn.Module):
+class BertEncoder(nn.Module, GradientCheckpointingMixin):
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -426,20 +437,19 @@ class BertEncoder(nn.Module):
                     )
                     use_cache = False
 
-                def create_custom_forward(module):
+                def create_custom_forward(module, mode):
                     def custom_forward(*inputs):
-                        return module(*inputs, past_key_value, output_attentions)
+                        return module(*inputs, past_key_value, output_attentions, mode=mode)
 
                     return custom_forward
 
                 layer_outputs = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(layer_module),
+                    create_custom_forward(layer_module, mode),
                     hidden_states,
                     attention_mask,
                     layer_head_mask,
                     encoder_hidden_states,
-                    encoder_attention_mask,
-                    mode=mode,
+                    encoder_attention_mask
                 )
             else:
                 layer_outputs = layer_module(
@@ -545,7 +555,7 @@ class BertOnlyMLMHead(nn.Module):
         return prediction_scores
 
 
-class BertPreTrainedModel(PreTrainedModel):
+class BertPreTrainedModel(GradientCheckpointingMixin, PreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
     models.
