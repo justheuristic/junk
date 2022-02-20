@@ -5,6 +5,7 @@
  * For full license text, see LICENSE.txt file in the repo root or https://opensource.org/licenses/BSD-3-Clause
  * By Junnan Li
 '''
+import sys
 from models.med import BertConfig, BertModel, BertLMHeadModel
 from transformers import BertTokenizer
 import transformers
@@ -87,7 +88,8 @@ class BLIP_Pretrain(nn.Module):
         
         self.queue_size = queue_size
         self.momentum = momentum
-        self.temp = nn.Parameter(0.07*torch.ones([]))   
+        self.temp = nn.Parameter(10.0*torch.ones([]))  
+        self._step = 0
         
         # create the decoder
         decoder_config = BertConfig.from_json_file(med_config)
@@ -101,7 +103,7 @@ class BLIP_Pretrain(nn.Module):
         
     def forward(self, image, caption, alpha):
         with torch.no_grad():
-            self.temp.clamp_(0.001,0.5)
+            self.temp.clamp_(0.001,100.0)
         
         image_embeds = self.visual_encoder(image) 
         image_atts = torch.ones(image_embeds.size()[:-1],dtype=torch.long).to(image.device)        
@@ -138,7 +140,7 @@ class BLIP_Pretrain(nn.Module):
         sim_t2i = text_feat @ image_feat_all / self.temp
                              
         loss_i2t = -torch.sum(F.log_softmax(sim_i2t, dim=1)*sim_i2t_targets,dim=1).mean()
-        loss_t2i = -torch.sum(F.log_softmax(sim_t2i, dim=1)*sim_t2i_targets,dim=1).mean() 
+        loss_t2i = -torch.sum(F.log_softmax(sim_t2i, dim=1)*sim_t2i_targets,dim=1).mean()
 
         loss_ita = (loss_i2t+loss_t2i)/2
 
@@ -163,13 +165,16 @@ class BLIP_Pretrain(nn.Module):
             weights_i2t = F.softmax(sim_i2t[:,:bs],dim=1)+1e-4  
             weights_i2t.fill_diagonal_(0)
 
+        assert weights_t2i.isfinite().all()
+        assert weights_i2t.isfinite().all()
+
         # select a negative image for each text
         image_embeds_neg = []    
         for b in range(bs):
             neg_idx = torch.multinomial(weights_t2i[b], 1).item()
             image_embeds_neg.append(image_embeds[neg_idx])
         image_embeds_neg = torch.stack(image_embeds_neg,dim=0)   
-
+        
         # select a negative text for each image
         text_ids_neg = []
         text_atts_neg = []
@@ -251,6 +256,7 @@ class BLIP_Pretrain(nn.Module):
         ptr = (ptr + batch_size) % self.queue_size  # move pointer
 
         self.queue_ptr[0] = ptr 
+        self._step += 1
 
 
 def blip_pretrain(**kwargs):

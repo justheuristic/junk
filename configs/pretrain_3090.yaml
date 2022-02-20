@@ -10,14 +10,14 @@ vit_ckpt_layer: 999999
 bert_grad_ckpt: True
 
 image_size: 224
-batch_size: 75
+batch_size: 240
 
 queue_size: 57600
 alpha: 0.4
 
 # optimizer
 weight_decay: 0.05
-init_lr: 1e-4
+init_lr: 1e-6
 min_lr: 1e-6
 warmup_lr: 1e-6
 lr_decay_rate: 0.9
