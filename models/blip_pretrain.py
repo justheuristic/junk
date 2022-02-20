@@ -87,7 +87,7 @@ class BLIP_Pretrain(nn.Module):
         
         self.queue_size = queue_size
         self.momentum = momentum
-        self.temp = nn.Parameter(1.0*torch.ones([]))   
+        self.temp = nn.Parameter(0.07*torch.ones([]))   
         
         # create the decoder
         decoder_config = BertConfig.from_json_file(med_config)
@@ -101,7 +101,7 @@ class BLIP_Pretrain(nn.Module):
         
     def forward(self, image, caption, alpha):
         with torch.no_grad():
-            self.temp.clamp_(0.001,100)
+            self.temp.clamp_(0.001,0.5)
         
         image_embeds = self.visual_encoder(image) 
         image_atts = torch.ones(image_embeds.size()[:-1],dtype=torch.long).to(image.device)        
@@ -125,8 +125,8 @@ class BLIP_Pretrain(nn.Module):
             text_feat_m = F.normalize(self.text_proj_m(text_output_m.last_hidden_state[:,0,:]),dim=-1) 
             text_feat_all = torch.cat([text_feat_m.t(),self.text_queue.clone().detach()],dim=1)
 
-            sim_i2t_m = image_feat_m @ (text_feat_all / self.temp)
-            sim_t2i_m = text_feat_m @ (image_feat_all / self.temp)
+            sim_i2t_m = image_feat_m @ text_feat_all / self.temp
+            sim_t2i_m = text_feat_m @ image_feat_all / self.temp
 
             sim_targets = torch.zeros(sim_i2t_m.size()).to(image.device)
             sim_targets.fill_diagonal_(1)          
@@ -134,8 +134,8 @@ class BLIP_Pretrain(nn.Module):
             sim_i2t_targets = alpha * F.softmax(sim_i2t_m, dim=1) + (1 - alpha) * sim_targets
             sim_t2i_targets = alpha * F.softmax(sim_t2i_m, dim=1) + (1 - alpha) * sim_targets        
 
-        sim_i2t = image_feat @ (text_feat_all / self.temp)
-        sim_t2i = text_feat @ (image_feat_all / self.temp)
+        sim_i2t = image_feat @ text_feat_all / self.temp
+        sim_t2i = text_feat @ image_feat_all / self.temp
                              
         loss_i2t = -torch.sum(F.log_softmax(sim_i2t, dim=1)*sim_i2t_targets,dim=1).mean()
         loss_t2i = -torch.sum(F.log_softmax(sim_t2i, dim=1)*sim_t2i_targets,dim=1).mean() 
