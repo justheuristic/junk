@@ -121,7 +121,7 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
                 state = powerSGD.PowerSGDState(
                     process_group=_get_default_group(),
                     matrix_approximation_rank=1,  # batched powersgd only works at rank 1
-                    start_powerSGD_iter=10, #ACHTUNG: IN ACTUAL TRAINING we should run 1000-5000 steps w/o powersgd
+                    start_powerSGD_iter=2, #ACHTUNG: IN ACTUAL TRAINING we should run 1000-5000 steps w/o powersgd
                 )
                 model.register_comm_hook(state, powerSGD.powerSGD_hook)
             elif args.grad_compression.startswith('power-'):
@@ -130,7 +130,7 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
                 state = powerSGD.PowerSGDState(
                     process_group=_get_default_group(),
                     matrix_approximation_rank=rank,
-                    start_powerSGD_iter=10, #ACHTUNG: IN ACTUAL TRAINING we should run 1000-5000 steps w/o powersgd
+                    start_powerSGD_iter=2, #ACHTUNG: IN ACTUAL TRAINING we should run 1000-5000 steps w/o powersgd
                 )
                 model.register_comm_hook(state, powerSGD.powerSGD_hook)
             elif args.grad_compression.startswith('power_half-'):
@@ -139,7 +139,7 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
                 state = powerSGD.PowerSGDState(
                     process_group=_get_default_group(),
                     matrix_approximation_rank=rank,
-                    start_powerSGD_iter=10, #ACHTUNG: IN ACTUAL TRAINING we should run 1000-5000 steps w/o powersgd
+                    start_powerSGD_iter=2, #ACHTUNG: IN ACTUAL TRAINING we should run 1000-5000 steps w/o powersgd
                 )
                 model.register_comm_hook(state, hooks.fp16_compress_wrapper(powerSGD.powerSGD_hook))
             else:
