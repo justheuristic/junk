@@ -120,6 +120,7 @@ def train(model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None
             scaler.update()
 
         else:
+            raise NotImplementedError("TODO later")
             total_loss = get_loss(model, images, texts, loss_img, loss_txt, args)
             total_loss.backward()
             optimizer.step()
@@ -137,7 +138,7 @@ def train(model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None
             logging.info(
                 f"Train Epoch: {epoch} [{num_samples}/{samples_per_epoch} ({percent_complete:.0f}%)]\t"
                 f"Loss: {total_loss.item():.6f}\tData (t) {data_time:.3f}\tBatch (t) {batch_time:.3f}"
-                f"\tLR: {optimizer.param_groups[0]['lr']:5f}\tlogit_scale {m.logit_scale.data:.3f}"
+                f"\tLR: {optimizer.param_groups[0]['lr']:5f}\tlogit_scale {m.logit_scale.item():.3f}"
             )
             # save train loss / etc.
 
