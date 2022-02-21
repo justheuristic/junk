@@ -22,7 +22,8 @@ def is_master(args):
     return (not args.distributed) or args.rank == 0
 
 def get_loss(model, images, texts, loss_img, loss_txt, args):
-    image_features, text_features, logit_scale = model(images, texts)
+    with model.no_sync():
+        image_features, text_features, logit_scale = model(images, texts)
     logit_scale = logit_scale.mean()
     if args.distributed and args.aggregate and not args.sharded_loss:
         world_size = dist.get_world_size()
