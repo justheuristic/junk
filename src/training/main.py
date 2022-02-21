@@ -109,20 +109,39 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         if args.distributed:
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+            from torch.distributed.distributed_c10d import _get_default_group
+            import torch.distributed.algorithms.ddp_comm_hooks.default_hooks as hooks
+            import torch.distributed.algorithms.ddp_comm_hooks.powerSGD_hook as powerSGD
             
             if args.grad_compression is None:
                 pass  # default
             elif args.grad_compression == 'fp16':
-                from torch.distributed.distributed_c10d import _get_default_group
-                import torch.distributed.algorithms.ddp_comm_hooks.default_hooks as hooks
                 model.register_comm_hook(_get_default_group(), hooks.fp16_compress_hook)
-            elif args.grad_compression == 'power-1':
+            elif args.grad_compression == 'power_batched-1':
                 state = powerSGD.PowerSGDState(
-                    process_group=None,
-                    matrix_approximation_rank=1,
-                    start_powerSGD_iter=5, #ACHTUNG: IN ACTUAL TRAINING we should run 1000-5000 steps w/o powersgd
+                    process_group=_get_default_group(),
+                    matrix_approximation_rank=1,  # batched powersgd only works at rank 1
+                    start_powerSGD_iter=10, #ACHTUNG: IN ACTUAL TRAINING we should run 1000-5000 steps w/o powersgd
                 )
                 model.register_comm_hook(state, powerSGD.powerSGD_hook)
+            elif args.grad_compression.startswith('power-'):
+                assert args.grad_compression.count('-') == 1
+                rank = int(args.grad_compression.split('-')[1])
+                state = powerSGD.PowerSGDState(
+                    process_group=_get_default_group(),
+                    matrix_approximation_rank=rank,
+                    start_powerSGD_iter=10, #ACHTUNG: IN ACTUAL TRAINING we should run 1000-5000 steps w/o powersgd
+                )
+                model.register_comm_hook(state, powerSGD.powerSGD_hook)
+            elif args.grad_compression.startswith('power_half-'):
+                assert args.grad_compression.count('-') == 1
+                rank = int(args.grad_compression.split('-')[1])
+                state = powerSGD.PowerSGDState(
+                    process_group=_get_default_group(),
+                    matrix_approximation_rank=rank,
+                    start_powerSGD_iter=10, #ACHTUNG: IN ACTUAL TRAINING we should run 1000-5000 steps w/o powersgd
+                )
+                model.register_comm_hook(state, hooks.fp16_compress_wrapper(powerSGD.powerSGD_hook))
             else:
                 raise ValueError(f"Unexpected grad_compression: {args.grad_compression}")
                 
