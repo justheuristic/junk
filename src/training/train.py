@@ -120,7 +120,6 @@ def train(model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None
             scaler.update()
 
         else:
-            raise NotImplementedError("TODO later")
             total_loss = get_loss(model, images, texts, loss_img, loss_txt, args)
             total_loss.backward()
             optimizer.step()
