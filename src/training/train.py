@@ -9,6 +9,7 @@ import torch.nn as nn
 from torch.cuda.amp import autocast
 import torch.distributed as dist
 import torch.distributed.nn
+from contextlib import nullcontext
 
 from .zero_shot import zero_shot_eval
 
@@ -21,23 +22,24 @@ import logging
 def is_master(args):
     return (not args.distributed) or args.rank == 0
 
-def get_loss(model, images, texts, loss_img, loss_txt, args):
-    with model.no_sync():
+def get_loss(model, images, texts, loss_img, loss_txt, args, no_sync: bool = True):
+    with model.no_sync() if no_sync else nullcontext():
         image_features, text_features, logit_scale = model(images, texts)
     logit_scale = logit_scale.mean()
     if args.distributed and args.aggregate and not args.sharded_loss:
         world_size = dist.get_world_size()
         rank = dist.get_rank()
+        print(image_features.dtype)
 
         # We gather tensors from all gpus to get more negatives to contrast with.
         gathered_image_features = [
-            torch.randn_like(image_features) for _ in range(world_size)
+            torch.zeros_like(image_features) for _ in range(world_size)
         ]
         gathered_text_features = [
-            torch.randn_like(text_features) for _ in range(world_size)
+            torch.zeros_like(text_features) for _ in range(world_size)
         ]
-        #dist.all_gather(gathered_image_features, image_features)
-        #dist.all_gather(gathered_text_features, text_features)
+        dist.all_gather(gathered_image_features, image_features)
+        dist.all_gather(gathered_text_features, text_features)
 
         all_image_features = torch.cat(
             [image_features]
