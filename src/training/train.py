@@ -113,7 +113,7 @@ def train(model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None
 
         # with automatic mixed precision.
         if args.precision == "amp":
-            with autocast(), model.no_sync():
+            with autocast():#, model.no_sync():TODO
                 total_loss = get_loss(model, images, texts, loss_img, loss_txt, args)
                 scaler.scale(total_loss).backward()
                 scaler.step(optimizer)
