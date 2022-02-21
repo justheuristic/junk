@@ -36,8 +36,8 @@ def get_loss(model, images, texts, loss_img, loss_txt, args):
         gathered_text_features = [
             torch.zeros_like(text_features, dtype=torch.half) for _ in range(world_size)
         ]
-        dist.all_gather(gathered_image_features, image_features.half())
-        dist.all_gather(gathered_text_features, text_features.half())
+        dist.all_gather(gathered_image_features, image_features)  # comment this to measure without allgather
+        dist.all_gather(gathered_text_features, text_features)  # comment this to measure without allgather
         gathered_image_features = [x.to(image_features.dtype) for x in gathered_image_features]
         gathered_text_features = [x.to(text_features.dtype) for x in gathered_text_features]
 
