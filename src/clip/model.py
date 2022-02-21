@@ -308,7 +308,8 @@ class CLIP(nn.Module):
     def initialize_parameters(self):
         nn.init.normal_(self.token_embedding.weight, std=0.02)
         nn.init.normal_(self.positional_embedding, std=0.01)
-        self.logit_scale[...] = torch.ones([1]) * np.log(1 / 0.07)
+        with torch.no_grad():
+            self.logit_scale.data[...] = torch.ones([1]) * np.log(1 / 0.07)
         #NOTE: whoever decided it was a good idea to create remove delete old parameter 
         # and create a new one here: you should be ashamed of yourself >.<
 
