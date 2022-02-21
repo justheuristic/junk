@@ -30,15 +30,13 @@ def get_loss(model, images, texts, loss_img, loss_txt, args):
 
         # We gather tensors from all gpus to get more negatives to contrast with.
         gathered_image_features = [
-            torch.zeros_like(image_features) for _ in range(world_size)
+            torch.randn_like(image_features) for _ in range(world_size)
         ]
         gathered_text_features = [
-            torch.zeros_like(text_features) for _ in range(world_size)
+            torch.randn_like(text_features) for _ in range(world_size)
         ]
         #dist.all_gather(gathered_image_features, image_features)
         #dist.all_gather(gathered_text_features, text_features)
-        gathered_image_features = torch.randn_like(gathered_image_features)
-        gathered_text_features = torch.randn_like(gathered_text_features)
 
         all_image_features = torch.cat(
             [image_features]
