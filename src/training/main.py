@@ -109,9 +109,23 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         if args.distributed:
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-            from torch.distributed.distributed_c10d import _get_default_group
-            import torch.distributed.algorithms.ddp_comm_hooks.default_hooks as hooks
-            model.register_comm_hook(_get_default_group(), hooks.fp16_compress_hook)
+            
+            if args.grad_compression is None:
+                pass  # default
+            elif args.grad_compression == 'fp16':
+                from torch.distributed.distributed_c10d import _get_default_group
+                import torch.distributed.algorithms.ddp_comm_hooks.default_hooks as hooks
+                model.register_comm_hook(_get_default_group(), hooks.fp16_compress_hook)
+            elif args.grad_compression == 'power-1':
+                state = powerSGD.PowerSGDState(
+                    process_group=None,
+                    matrix_approximation_rank=1,
+                    start_powerSGD_iter=5, #ACHTUNG: IN ACTUAL TRAINING we should run 1000-5000 steps w/o powersgd
+                )
+                model.register_comm_hook(state, powerSGD.powerSGD_hook)
+            else:
+                raise ValueError(f"Unexpected grad_compression: {args.grad_compression}")
+                
         if args.dp:
             model = torch.nn.DataParallel(model, device_ids=args.multigpu)
 

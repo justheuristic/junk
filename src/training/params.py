@@ -92,6 +92,8 @@ def parse_args():
     parser.add_argument(
         "--warmup", type=int, default=10000, help="Number of steps to warmup for."
     )
+    parser.add_argument("--grad_compression", default=None, 
+                        help="compress gradients for allreduce, see main.py near DistributedDataParallel init")
     parser.add_argument("--use-bn-sync",
         default=False,
         action="store_true",
