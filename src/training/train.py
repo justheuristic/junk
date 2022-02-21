@@ -56,8 +56,8 @@ def get_loss(model, images, texts, loss_img, loss_txt, args):
         logits_per_text = logits_per_image.t()
 
     elif args.distributed and args.aggregate and args.sharded_loss:
-        gathered_image_features = torch.cat(dist.nn.all_gather(image_features))
-        gathered_text_features = torch.cat(dist.nn.all_gather(text_features))
+        gathered_image_features = torch.cat(dist.nn.all_gather(image_features.half())).to(text_features.dtype)
+        gathered_text_features = torch.cat(dist.nn.all_gather(text_features.half())).to(text_features.dtype)
         logits_per_image = logit_scale * image_features @ gathered_text_features.t()
         logits_per_text = logit_scale * text_features @ gathered_image_features.t()
     else:
