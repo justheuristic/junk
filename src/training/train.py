@@ -1,6 +1,7 @@
 import os
 import time
 import json
+from contextlib import nullcontext
 import numpy as np
 
 import torch
@@ -113,7 +114,7 @@ def train(model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None
 
         # with automatic mixed precision.
         if args.precision == "amp":
-            with autocast():#, model.no_sync():
+            with autocast(), model.no_sync() if args.grad_compression == 'no_sync' else nullcontext():
                 total_loss = get_loss(model, images, texts, loss_img, loss_txt, args)
                 scaler.scale(total_loss).backward()
                 scaler.step(optimizer)

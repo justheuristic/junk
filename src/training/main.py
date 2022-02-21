@@ -113,15 +113,17 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
             import torch.distributed.algorithms.ddp_comm_hooks.default_hooks as hooks
             import torch.distributed.algorithms.ddp_comm_hooks.powerSGD_hook as powerSGD
             
-            if args.grad_compression is None:
+            if args.grad_compression is None or args.grad_compression == 'none':
                 pass  # default
+            elif args.grad_compression == 'no_sync':
+                pass  # will be disabled in train.py
             elif args.grad_compression == 'fp16':
                 model.register_comm_hook(_get_default_group(), hooks.fp16_compress_hook)
             elif args.grad_compression == 'power_batched-1':
                 state = powerSGD.PowerSGDState(
                     process_group=_get_default_group(),
                     matrix_approximation_rank=1,  # batched powersgd only works at rank 1
-                    start_powerSGD_iter=2, #ACHTUNG: IN ACTUAL TRAINING we should run 100-1000 steps w/o powersgd
+                    start_powerSGD_iter=2, #ACHTUNG: IN ACTUAL TRAINING we should run 100-1000 steps before powersgd
                 )
                 model.register_comm_hook(state, powerSGD.powerSGD_hook)
             elif args.grad_compression.startswith('power-'):
@@ -130,7 +132,7 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
                 state = powerSGD.PowerSGDState(
                     process_group=_get_default_group(),
                     matrix_approximation_rank=rank,
-                    start_powerSGD_iter=2, #ACHTUNG: IN ACTUAL TRAINING we should run 100-1000 steps w/o powersgd
+                    start_powerSGD_iter=2, #ACHTUNG: IN ACTUAL TRAINING we should run 100-1000 steps before powersgd
                 )
                 model.register_comm_hook(state, powerSGD.powerSGD_hook)
             elif args.grad_compression.startswith('power_half-'):
@@ -139,7 +141,7 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
                 state = powerSGD.PowerSGDState(
                     process_group=_get_default_group(),
                     matrix_approximation_rank=rank,
-                    start_powerSGD_iter=2, #ACHTUNG: IN ACTUAL TRAINING we should run 100-1000 steps w/o powersgd
+                    start_powerSGD_iter=2, #ACHTUNG: IN ACTUAL TRAINING we should run 100-1000 steps before powersgd
                 )
                 model.register_comm_hook(state, hooks.fp16_compress_wrapper(powerSGD.powerSGD_hook))
             else:
