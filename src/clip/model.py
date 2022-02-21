@@ -300,14 +300,16 @@ class CLIP(nn.Module):
         self.ln_final = LayerNorm(transformer_width)
 
         self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        self.logit_scale = nn.Parameter(torch.ones([1]) * np.log(1 / 0.07))
+        #NOTE: ^-- we make it 1d because powerSGD does not handle 0d tensors correctly
 
         self.initialize_parameters()
 
     def initialize_parameters(self):
         nn.init.normal_(self.token_embedding.weight, std=0.02)
         nn.init.normal_(self.positional_embedding, std=0.01)
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        self.logit_scale = nn.Parameter(torch.ones([1]) * np.log(1 / 0.07))
+        #NOTE: who the duck decided it was a good idea to create a new parameter during init?!
 
         if isinstance(self.visual, ModifiedResNet):
             if self.visual.attnpool is not None:
@@ -375,7 +377,7 @@ class CLIP(nn.Module):
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
         
-        return image_features, text_features, self.logit_scale.exp()
+        return image_features, text_features, self.logit_scale[0].exp()
 
 
 def convert_weights(model: nn.Module):
