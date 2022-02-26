@@ -202,6 +202,8 @@ class Transformer(nn.Module):
         self.resblocks = nn.Sequential(*[ResidualAttentionBlock(width, heads, attn_mask) for _ in range(layers)])
 
     def forward(self, x: torch.Tensor):
+        if torch.is_autocast_enabled():
+            x = x.half()
         # not conducive to TorchScript so must be altered later
         if self.gradient_checkpointing:
             return torch.utils.checkpoint.checkpoint_sequential(self.resblocks, self.checkpoints, x)

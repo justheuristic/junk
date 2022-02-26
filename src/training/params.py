@@ -241,6 +241,12 @@ def parse_args():
         action="store_true",
         help="Use sharded loss calculation."
     )
+    parser.add_argument(
+        "--block-size",
+        type=int,
+        default=None,
+        help="block size for memory-efficient loss computation, incompatible with sharded_loss",
+    )
     args = parser.parse_args()
     args.aggregate = not args.skip_aggregate
 

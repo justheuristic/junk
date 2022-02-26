@@ -12,6 +12,7 @@ import torch.distributed as dist
 import torch.distributed.nn
 
 from .zero_shot import zero_shot_eval
+from .cross_entropy import pairwise_cross_entropy
 
 import sys
 import pdb
@@ -23,6 +24,7 @@ def is_master(args):
     return (not args.distributed) or args.rank == 0
 
 def get_loss(model, images, texts, loss_img, loss_txt, args):
+    assert bool(args.block_size) != args.sharded_loss, "loss can be either blocky or sharded, not both"
     image_features, text_features, logit_scale = model(images, texts)
     logit_scale = logit_scale.mean()
     if args.distributed and args.aggregate and not args.sharded_loss:
@@ -51,6 +53,9 @@ def get_loss(model, images, texts, loss_img, loss_txt, args):
             + gathered_text_features[:rank]
             + gathered_text_features[rank + 1 :]
         )
+        
+        if args.block_size:
+            return pairwise_cross_entropy(all_image_features, all_text_features, args.block_size)
 
         # this is needed to send gradients back everywhere.
         logits_per_image = logit_scale * all_image_features @ all_text_features.t()
@@ -62,10 +67,15 @@ def get_loss(model, images, texts, loss_img, loss_txt, args):
         logits_per_image = logit_scale * image_features @ gathered_text_features.t()
         logits_per_text = logit_scale * text_features @ gathered_image_features.t()
     else:
+        if args.block_size:
+            return pairwise_cross_entropy(image_features, text_features, args.block_size)
+
         logits_per_image = logit_scale * image_features @ text_features.t()
         logits_per_text = logit_scale * text_features @ image_features.t()
 
-    ground_truth = torch.arange(len(logits_per_image)).long()
+    
+    ground_truth = torch.arange(len(logits_per_image), dtype=torch.long, device=logits_per_image.device)
+
     if args.sharded_loss:
         ground_truth += dist.get_rank() * len(logits_per_image)
     if args.gpu is not None:
