@@ -23,7 +23,7 @@ import logging
 def is_master(args):
     return (not args.distributed) or args.rank == 0
 
-def get_loss(model, images, texts, loss_img, loss_txt, args):
+def get_loss(model, images, texts, loss_img, loss_txt, args, gathered_dtype : torch.dtype = torch.half):
     assert bool(args.block_size) != args.sharded_loss, "loss can be either blocky or sharded, not both"
     image_features, text_features, logit_scale = model(images, texts)
     logit_scale = logit_scale.mean()
@@ -32,16 +32,11 @@ def get_loss(model, images, texts, loss_img, loss_txt, args):
         rank = dist.get_rank()
 
         # We gather tensors from all gpus to get more negatives to contrast with.
-        gathered_image_features = [
-            torch.zeros_like(image_features, dtype=torch.half) for _ in range(world_size)
-        ]
-        gathered_text_features = [
-            torch.zeros_like(text_features, dtype=torch.half) for _ in range(world_size)
-        ]
-        dist.all_gather(gathered_image_features, image_features.half())  # comment this to measure without allgather
-        dist.all_gather(gathered_text_features, text_features.half())  # comment this to measure without allgather
-        gathered_image_features = [x.to(image_features.dtype) for x in gathered_image_features]
-        gathered_text_features = [x.to(text_features.dtype) for x in gathered_text_features]
+        image_features, text_features = image_features.to(gathered_dtype), text_features.to(gathered_dtype)
+        gathered_image_features = [torch.zeros_like(image_features) for _ in range(world_size)]
+        gathered_text_features = [torch.zeros_like(text_features) for _ in range(world_size)]
+        dist.all_gather(gathered_image_features, image_features)
+        dist.all_gather(gathered_text_features, text_features)  # comment this to measure without allgather
 
         all_image_features = torch.cat(
             [image_features]
