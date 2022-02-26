@@ -8,7 +8,7 @@ from typing import Union, List
 
 import torch
 from PIL import Image
-from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, RandomResizedCrop
+from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, RandomResizedCrop, Lambda
 from tqdm import tqdm
 
 from clip.model import build_model
@@ -67,6 +67,7 @@ def _transform(n_px: int, is_train: bool):
             _convert_to_rgb,
             ToTensor(),
             normalize,
+            Lambda(torch.Tensor.half),
         ])
     else:
         return Compose([
@@ -75,6 +76,7 @@ def _transform(n_px: int, is_train: bool):
             _convert_to_rgb,
             ToTensor(),
             normalize,
+            Lambda(torch.Tensor.half),
         ])
 
 
