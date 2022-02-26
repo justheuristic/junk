@@ -156,9 +156,10 @@ class LayerNorm(nn.LayerNorm):
     """Subclass torch's LayerNorm to handle fp16."""
 
     def forward(self, x: torch.Tensor):
-        orig_type = x.dtype
-        ret = super().forward(x.type(torch.float32))
-        return ret.type(orig_type)
+        if torch.is_autocast_enabled():
+            return super().forward(x)
+        else:
+            return super().forward(x.to(torch.float32)).to(x.dtype)
 
 
 class QuickGELU(nn.Module):
@@ -169,7 +170,8 @@ class QuickGELU(nn.Module):
 class ResidualAttentionBlock(nn.Module):
     def __init__(self, d_model: int, n_head: int, attn_mask: torch.Tensor = None):
         super().__init__()
-
+        # note: THIS LAYER SHOULD NOT HAVE DROPOUT OR OTHER RANDOMNESS
+        # if it does, please change preserve_rng_state=False -> True in Transformer below
 
         self.attn = nn.MultiheadAttention(d_model, n_head)
         self.ln_1 = LayerNorm(d_model)
@@ -186,7 +188,7 @@ class ResidualAttentionBlock(nn.Module):
         return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
     def forward(self, x: torch.Tensor):
-        x = x + self.attention(self.ln_1(x))
+        x = x + torch.utils.checkpoint.checkpoint(lambda x: self.attention(self.ln_1(x)), x, preserve_rng_state=False)
         x = x + self.mlp(self.ln_2(x))
         return x
 
@@ -206,7 +208,8 @@ class Transformer(nn.Module):
             x = x.half()
         # not conducive to TorchScript so must be altered later
         if self.gradient_checkpointing:
-            return torch.utils.checkpoint.checkpoint_sequential(self.resblocks, self.checkpoints, x)
+            return torch.utils.checkpoint.checkpoint_sequential(self.resblocks, self.checkpoints, x,
+                                                                preserve_rng_state=False)  # <-- no dropout
         return self.resblocks(x)
 
 
@@ -362,7 +365,9 @@ class CLIP(nn.Module):
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
-        x = self.ln_final(x).type(self.dtype)
+        x = self.ln_final(x)
+        if not torch.is_autocast_enabled():
+            x = x.type(self.dtype)
 
         # x.shape = [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)

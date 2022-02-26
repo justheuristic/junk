@@ -111,7 +111,8 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
         if args.distributed and args.use_bn_sync:
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         if args.distributed:
-            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+            model = torch.nn.parallel.DistributedDataParallel(
+                model, device_ids=[args.gpu], bucket_cap_mb=64, broadcast_buffers=False)
             from torch.distributed.distributed_c10d import _get_default_group
             import torch.distributed.algorithms.ddp_comm_hooks.default_hooks as hooks
             import torch.distributed.algorithms.ddp_comm_hooks.powerSGD_hook as powerSGD
@@ -126,7 +127,7 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
                 state = powerSGD.PowerSGDState(
                     process_group=_get_default_group(),
                     matrix_approximation_rank=1,  # batched powersgd only works at rank 1
-                    start_powerSGD_iter=2, #ACHTUNG: IN ACTUAL TRAINING we should run 100-1000 steps before powersgd
+                    start_powerSGD_iter=args.power_sgd_warmup,
                 )
                 model.register_comm_hook(state, powerSGD.powerSGD_hook)
             elif args.grad_compression.startswith('power-'):
@@ -135,7 +136,7 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
                 state = powerSGD.PowerSGDState(
                     process_group=_get_default_group(),
                     matrix_approximation_rank=rank,
-                    start_powerSGD_iter=2, #ACHTUNG: IN ACTUAL TRAINING we should run 100-1000 steps before powersgd
+                    start_powerSGD_iter=args.power_sgd_warmup,
                 )
                 model.register_comm_hook(state, powerSGD.powerSGD_hook)
             elif args.grad_compression.startswith('power_half-'):

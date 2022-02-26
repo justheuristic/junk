@@ -89,7 +89,7 @@ def _pairwise_crossentropy_forward(
 def _pairwise_crossentropy_backward(
         grad_output: torch.Tensor, left: torch.Tensor, right: torch.Tensor,
         left_logsumexp: torch.Tensor, right_logsumexp: torch.Tensor,
-        block_size: int
+        block_size: int, dtype: torch.dtype = torch.float32
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Backprop gradients w.r.t. mean pair-wise cross-entropy to left and right vectors
@@ -106,8 +106,8 @@ def _pairwise_crossentropy_backward(
     # grad crossentropy wrt left = -right + [softmax(left@right.t(), dim=1)] @ right
 
     # step 1: initialize gradients with right/left tensors (first summand from above)
-    grad_right = left.mul(-1 / len(left))
-    grad_left = right.mul(-1 / len(left))
+    grad_right = left.mul(-1 / len(left)).to(dtype)
+    grad_left = right.mul(-1 / len(left)).to(dtype)
 
     for block_start_left in range(0, len(left), block_size):
         left_block_ix = slice(block_start_left, block_start_left + block_size)
@@ -119,9 +119,9 @@ def _pairwise_crossentropy_backward(
             block_probs_left = (block_products - left_logsumexp[left_block_ix, None]).exp_()
 
             # step 2A: accumulate one block of [softmax(left @ right.t(), dim=1) @ right]
-            grad_left[left_block_ix].addmm_(block_probs_left, right[right_block_ix], alpha=0.5 / len(right))
+            grad_left[left_block_ix].addmm_(block_probs_left, right[right_block_ix].to(dtype), alpha=0.5 / len(right))
             # ... and vice versa for grad w.r.t. right = -left + [softmax(left @ right.t()).t() @ left]
-            grad_right[right_block_ix].addmm_(block_probs_left.t(), left[left_block_ix], alpha=0.5 / len(left))
+            grad_right[right_block_ix].addmm_(block_probs_left.t(), left[left_block_ix].to(dtype), alpha=0.5 / len(left))
 
             # step 2B: same as 2A, but for inverse right-to-left cross-entropy
             # WARNING: block_probs_left is no longer valid after this line
@@ -129,8 +129,8 @@ def _pairwise_crossentropy_backward(
                 block_products, right_logsumexp[None, right_block_ix], out=block_probs_left
             ).exp_()
 
-            grad_left[left_block_ix].addmm_(block_probs_right, right[right_block_ix], alpha=0.5 / len(right))
-            grad_right[right_block_ix].addmm_(block_probs_right.t(), left[left_block_ix], alpha=0.5 / len(left))
+            grad_left[left_block_ix].addmm_(block_probs_right, right[right_block_ix].to(dtype), alpha=0.5 / len(right))
+            grad_right[right_block_ix].addmm_(block_probs_right.t(), left[left_block_ix].to(dtype), alpha=0.5 / len(left))
     return grad_left, grad_right
 
 

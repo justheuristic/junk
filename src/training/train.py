@@ -121,14 +121,19 @@ def train(model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None
         if args.precision == "amp":
             with autocast(), model.no_sync() if args.grad_compression == 'no_sync' else nullcontext():
                 total_loss = get_loss(model, images, texts, loss_img, loss_txt, args)
-                scaler.scale(total_loss).backward()
-                scaler.step(optimizer)
+
+            scaler.scale(total_loss).backward()
+            total_loss = total_loss.item()
+            if 'power' in args.grad_compression and step == args.power_sgd_warmup - 1:
+                torch.cuda.synchronize(images.device); torch.cuda.empty_cache()
+            scaler.step(optimizer)
             scaler.update()
 
         else:
             raise NotImplementedError("TODO later")
             total_loss = get_loss(model, images, texts, loss_img, loss_txt, args)
             total_loss.backward()
+            total_loss = total_loss.item()
             optimizer.step()
 
         # Note: we clamp to 4.6052 = ln(100), as in the original paper.
@@ -143,14 +148,14 @@ def train(model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None
             percent_complete = 100.0 * i / num_batches_per_epoch
             logging.info(
                 f"Train Epoch: {epoch} [{num_samples}/{samples_per_epoch} ({percent_complete:.0f}%)]\t"
-                f"Loss: {total_loss.item():.6f}\tData (t) {data_time:.3f}\tBatch (t) {batch_time:.3f}"
+                f"Loss: {total_loss:.6f}\tData (t) {data_time:.3f}\tBatch (t) {batch_time:.3f}"
                 f"\tLR: {optimizer.param_groups[0]['lr']:5f}\tlogit_scale {m.logit_scale.item():.3f}"
             )
             # save train loss / etc.
 
             timestep = epoch * num_batches_per_epoch + i
             log_data = {
-                "loss": total_loss.item(),
+                "loss": total_loss,
                 "data_time": data_time,
                 "batch_time": batch_time,
                 "scale":  m.logit_scale.data.item(),
