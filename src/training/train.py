@@ -55,7 +55,7 @@ def get_loss(model, images, texts, loss_img, loss_txt, args):
         )
         
         if args.block_size:
-            return pairwise_cross_entropy(logits_per_image * all_image_features, all_text_features, args.block_size)
+            return pairwise_cross_entropy(logit_scale * all_image_features, all_text_features, args.block_size)
 
         # this is needed to send gradients back everywhere.
         logits_per_image = logit_scale * all_image_features @ all_text_features.t()
@@ -68,7 +68,7 @@ def get_loss(model, images, texts, loss_img, loss_txt, args):
         logits_per_text = logit_scale * text_features @ gathered_image_features.t()
     else:
         if args.block_size:
-            return pairwise_cross_entropy(logits_per_image * image_features, text_features, args.block_size)
+            return pairwise_cross_entropy(logit_scale * image_features, text_features, args.block_size)
 
         logits_per_image = logit_scale * image_features @ text_features.t()
         logits_per_text = logit_scale * text_features @ image_features.t()
