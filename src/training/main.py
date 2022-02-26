@@ -145,7 +145,7 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
                 state = powerSGD.PowerSGDState(
                     process_group=_get_default_group(),
                     matrix_approximation_rank=rank,
-                    start_powerSGD_iter=2, #ACHTUNG: IN ACTUAL TRAINING we should run 100-1000 steps before powersgd
+                    start_powerSGD_iter=args.power_sgd_warmup,
                 )
                 model.register_comm_hook(state, hooks.fp16_compress_wrapper(powerSGD.powerSGD_hook))
             else:
