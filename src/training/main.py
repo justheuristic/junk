@@ -29,7 +29,7 @@ from training.scheduler import cosine_lr
 def convert_models_to_fp32(model):
     for p in model.parameters():
         p.data = p.data.float()
-        if p.grad:
+        if p.grad is not None:
             p.grad.data = p.grad.data.float()
 
 def is_master(args):
@@ -85,6 +85,9 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
         if args.gradient_checkpointing:
             model_info['gradient_checkpointing'] = True
         model = CLIP(**model_info)
+        for param in model.parameters():
+            if param.grad is not None:
+                param.grad = torch.zeros_like(param)
         convert_weights(model)
         preprocess_train = _transform(model.visual.input_resolution, is_train=True)
         preprocess_val = _transform(model.visual.input_resolution, is_train=False)
