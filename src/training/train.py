@@ -13,6 +13,7 @@ import torch.distributed.nn
 
 from .zero_shot import zero_shot_eval
 from .cross_entropy import pairwise_cross_entropy
+import bitsandbytes.functional as F
 
 import sys
 import pdb
@@ -23,32 +24,14 @@ import logging
 def is_master(args):
     return (not args.distributed) or args.rank == 0
 
-def get_loss(model, images, texts, loss_img, loss_txt, args, gathered_dtype : torch.dtype = torch.half):
+def get_loss(model, images, texts, loss_img, loss_txt, args):
     assert bool(args.block_size) != args.sharded_loss, "loss can be either blocky or sharded, not both"
     image_features, text_features, logit_scale = model(images, texts)
     logit_scale = logit_scale.mean()
     if args.distributed and args.aggregate and not args.sharded_loss:
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
-
         # We gather tensors from all gpus to get more negatives to contrast with.
-        image_features, text_features = image_features.to(gathered_dtype), text_features.to(gathered_dtype)
-        gathered_image_features = [torch.zeros_like(image_features) for _ in range(world_size)]
-        gathered_text_features = [torch.zeros_like(text_features) for _ in range(world_size)]
-        dist.all_gather(gathered_image_features, image_features)
-        dist.all_gather(gathered_text_features, text_features)  # comment this to measure without allgather
+        all_image_features, all_text_features = all_gather_compressed(image_features, text_features)
 
-        all_image_features = torch.cat(
-            [image_features]
-            + gathered_image_features[:rank]
-            + gathered_image_features[rank + 1 :]
-        )
-        all_text_features = torch.cat(
-            [text_features]
-            + gathered_text_features[:rank]
-            + gathered_text_features[rank + 1 :]
-        )
-        
         if args.block_size:
             return pairwise_cross_entropy(logit_scale * all_image_features, all_text_features, args.block_size)
 
@@ -81,6 +64,53 @@ def get_loss(model, images, texts, loss_img, loss_txt, args, gathered_dtype : to
         + loss_txt(logits_per_text, ground_truth)
     ) / 2
     return total_loss
+
+
+def all_gather_compressed(image_features, text_features):
+    world_size = dist.get_world_size()
+    rank = dist.get_rank()
+    text_codes, (text_absmax, text_codebook) = F.quantize_blockwise(text_features)
+    gathered_text_codes = [torch.zeros_like(text_codes) for _ in range(world_size)]
+    handle_text1 = dist.all_gather(gathered_text_codes, text_codes, async_op=True)
+    gathered_text_absmax = [torch.zeros_like(text_absmax) for _ in range(world_size)]
+    handle_text2 = dist.all_gather(gathered_text_absmax, text_absmax, async_op=True)
+    gathered_text_codebook = [torch.zeros_like(text_codebook) for _ in range(world_size)]
+    handle_text3 = dist.all_gather(gathered_text_codebook, text_codebook, async_op=True)
+    
+    
+    image_codes, (image_absmax, image_codebook) = F.quantize_blockwise(image_features)
+    gathered_image_codes = [torch.zeros_like(image_codes) for _ in range(world_size)]
+    handle_image1 = dist.all_gather(gathered_image_codes, image_codes, async_op=True)
+    gathered_image_absmax = [torch.zeros_like(image_absmax) for _ in range(world_size)]
+    handle_image2 = dist.all_gather(gathered_image_absmax, image_absmax, async_op=True)
+    gathered_image_codebook = [torch.zeros_like(image_codebook) for _ in range(world_size)]
+    handle_image3 = dist.all_gather(gathered_image_codebook, image_codebook, async_op=True)
+    
+    handle_text1.wait(), handle_text2.wait(), handle_text3.wait()
+    gathered_text_features = [F.dequantize_blockwise(
+        gathered_text_codes[i], (gathered_text_absmax[i], gathered_text_codebook[i])).to(text_features.dtype)
+                              for i in range(world_size)]
+    all_text_features = torch.cat(
+        [text_features]
+        + gathered_text_features[:rank]
+        + gathered_text_features[rank + 1 :]
+    )
+
+    
+    handle_image1.wait(), handle_image2.wait(), handle_image3.wait()
+    gathered_image_features = [F.dequantize_blockwise(
+        gathered_image_codes[i], (gathered_image_absmax[i], gathered_image_codebook[i])).to(image_features.dtype)
+                              for i in range(world_size)]
+    all_image_features = torch.cat(
+        [image_features]
+        + gathered_image_features[:rank]
+        + gathered_image_features[rank + 1 :]
+    )
+    return all_image_features, all_text_features
+    
+    
+    
+    
 
 
 def train(model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None):
