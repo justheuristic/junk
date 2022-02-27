@@ -25,7 +25,7 @@ def is_master(args):
     return (not args.distributed) or args.rank == 0
 
 def get_loss(model, images, texts, loss_img, loss_txt, args):
-    assert bool(args.block_size) != args.sharded_loss, "loss can be either blocky or sharded, not both"
+    assert not args.block_size or not args.sharded_loss, "loss can be either blocky or sharded, not both"
     image_features, text_features, logit_scale = model(images, texts)
     logit_scale = logit_scale.mean()
     if args.distributed and args.aggregate and not args.sharded_loss:
@@ -76,8 +76,8 @@ def all_gather_compressed(image_features, text_features):
     handle_text2 = dist.all_gather(gathered_text_absmax, text_absmax, async_op=True)
     gathered_text_codebook = [torch.zeros_like(text_codebook) for _ in range(world_size)]
     handle_text3 = dist.all_gather(gathered_text_codebook, text_codebook, async_op=True)
-    
-    
+
+
     image_codes, (image_absmax, image_codebook) = F.quantize_blockwise(image_features)
     gathered_image_codes = [torch.zeros_like(image_codes) for _ in range(world_size)]
     handle_image1 = dist.all_gather(gathered_image_codes, image_codes, async_op=True)
@@ -85,7 +85,7 @@ def all_gather_compressed(image_features, text_features):
     handle_image2 = dist.all_gather(gathered_image_absmax, image_absmax, async_op=True)
     gathered_image_codebook = [torch.zeros_like(image_codebook) for _ in range(world_size)]
     handle_image3 = dist.all_gather(gathered_image_codebook, image_codebook, async_op=True)
-    
+
     handle_text1.wait(), handle_text2.wait(), handle_text3.wait()
     gathered_text_features = [F.dequantize_blockwise(
         gathered_text_codes[i], (gathered_text_absmax[i], gathered_text_codebook[i])).to(text_features.dtype)
@@ -96,7 +96,7 @@ def all_gather_compressed(image_features, text_features):
         + gathered_text_features[rank + 1 :]
     )
 
-    
+
     handle_image1.wait(), handle_image2.wait(), handle_image3.wait()
     gathered_image_features = [F.dequantize_blockwise(
         gathered_image_codes[i], (gathered_image_absmax[i], gathered_image_codebook[i])).to(image_features.dtype)
@@ -107,10 +107,6 @@ def all_gather_compressed(image_features, text_features):
         + gathered_image_features[rank + 1 :]
     )
     return all_image_features, all_text_features
-    
-    
-    
-    
 
 
 def train(model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None):
@@ -160,8 +156,10 @@ def train(model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None
             scaler.update()
 
         else:
-            raise NotImplementedError("TODO later")
-            total_loss = get_loss(model, images, texts, loss_img, loss_txt, args)
+            with model.no_sync() if args.grad_compression == 'no_sync' else nullcontext():
+                total_loss = get_loss(model, images, texts, loss_img, loss_txt, args)
+            if 'power' in args.grad_compression and step == args.power_sgd_warmup - 1:
+                torch.cuda.synchronize(images.device); torch.cuda.empty_cache()
             total_loss.backward()
             total_loss = total_loss.item()
             optimizer.step()
