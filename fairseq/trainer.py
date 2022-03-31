@@ -443,6 +443,13 @@ class Trainer(object):
                 async_write=self.cfg.checkpoint.write_checkpoints_asynchronously,
             )
         logger.info(f"Finished saving checkpoint to {os.path.abspath(filename)}")
+        try:
+            import nirvana_dl.snapshot as snap
+            snap.dump_snapshot()
+            print('Checkpoint saved to snapshots.')
+        except Exception:
+            print('Checkpoint NOT save to snapshots!')
+            pass
 
     def load_checkpoint(
         self,
