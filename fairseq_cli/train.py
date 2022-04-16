@@ -7,6 +7,7 @@
 Train a new model on one or across multiple GPUs.
 """
 
+import scipy.stats  # monkeypatch compatibility with internally compiled scipy: import before pytorch
 import argparse
 import logging
 import math
