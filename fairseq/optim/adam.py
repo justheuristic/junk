@@ -75,6 +75,11 @@ class FairseqAdam(FairseqOptimizer):
                     "--fp16-adam-stats is only supported with FusedAdamV1"
                 )
             self._optimizer = Adam(params, **self.optimizer_config)
+        print('!' * 1000)
+        print('Using SparsityInducingOptimizer')
+        assert all(isinstance(p, torch.nn.Parameter) for p in params)
+        from lean_transformer.config import SparsityInducingOptimizer
+        self._optimizer = SparsityInducingOptimizer(self._optimizer)
 
     @property
     def optimizer_config(self):
