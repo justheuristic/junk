@@ -48,7 +48,8 @@ class LeanGPTLanguageModel(BaseFairseqModel):
 
     def get_normalized_probs(self, net_output, log_probs: bool, sample=None):
         """Get normalized probabilities (or log probs) from a net's output."""
-        logits = net_output.logits.float()
+        logits = net_output.logits if hasattr(net_output, 'logits') else net_output['logits']
+        logits = logits.float()
         if log_probs:
             return F.log_softmax(logits, dim=-1)
         else:
