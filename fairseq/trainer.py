@@ -104,8 +104,8 @@ class Trainer(object):
             elif cfg.common.bf16:
                 self._criterion = self._criterion.to(dtype=torch.bfloat16)
                 self._model = self._model.to(dtype=torch.bfloat16)
-            elif cfg.common.amp:
-                self._amp_retries = 0
+        if cfg.common.amp:
+            self._amp_retries = 0
         if (
             not cfg.distributed_training.pipeline_model_parallel
             # the DistributedFairseqModel wrapper will handle moving to device,

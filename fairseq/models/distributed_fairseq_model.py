@@ -68,11 +68,6 @@ def DistributedFairseqModel(args, model, process_group, device):
             find_unused_parameters=args.find_unused_parameters,
             gradient_as_bucket_view=args.gradient_as_bucket_view,
         )
-        print("SETTING _set_static_graph(), hard-coding sequence length 2048 !")
-        for module in model.modules():
-            if isinstance(module, RotaryEmbeddings):
-                module._set_auxiliary_buffers(max_len=2048, device=device)
-        wrapped_model._set_static_graph()
         if args.ddp_comm_hook == "fp16":
             logger.info("enable fp16 communication hook in DDP")
             try:
