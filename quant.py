@@ -9,6 +9,18 @@ def quantize(x, scale, zero, maxq):
     q = torch.clamp(torch.round(x / scale) + zero, 0, maxq)
     return scale * (q - zero)
 
+import numpy as np
+import torch
+import torch.nn as nn
+
+
+def quantize(x, scale, zero, maxq):
+    if maxq < 0:
+        return (x > scale / 2).float() * scale + (x < zero / 2).float() * zero
+    q = torch.clamp(torch.round(x / scale) + zero, 0, maxq)
+    return scale * (q - zero)
+
+
 class Quantizer(nn.Module):
 
     def __init__(self, shape=1):
@@ -21,7 +33,7 @@ class Quantizer(nn.Module):
         self,
         bits, perchannel=False, sym=True, 
         mse=False, norm=2.4, grid=100, maxshrink=.8,
-        trits=False
+        trits=False, qq_bits=None,
     ):
         self.maxq = torch.tensor(2 ** bits - 1)
         self.perchannel = perchannel
@@ -30,6 +42,7 @@ class Quantizer(nn.Module):
         self.norm = norm
         self.grid = grid
         self.maxshrink = maxshrink 
+        self.qq_bits = qq_bits
         if trits:
             self.maxq = torch.tensor(-1) 
 
@@ -100,7 +113,14 @@ class Quantizer(nn.Module):
                 tmp = shape[1] if len(shape) != 3 else shape[2]
             self.scale = self.scale.repeat(tmp)
             self.zero = self.zero.repeat(tmp)
-
+        
+        if self.qq_bits is not None:
+            assert self.sym
+            self.qq = Quantizer(shape=self.scale.shape)
+            self.qq.configure(bits=self.qq_bits, perchannel=False, sym=False, mse=True)
+            self.qq.find_params(self.scale, weight=weight)
+            self.scale = self.qq.quantize(self.scale).reshape_as(self.scale)
+            
         if weight:
             shape = [-1] + [1] * (len(shape) - 1)
             self.scale = self.scale.reshape(shape)
@@ -115,6 +135,7 @@ class Quantizer(nn.Module):
         if len(shape) == 2:
             self.scale = self.scale.unsqueeze(0)
             self.zero = self.zero.unsqueeze(0)
+            
 
     def quantize(self, x):
         if self.ready():

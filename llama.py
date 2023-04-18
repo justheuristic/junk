@@ -2,6 +2,8 @@ import time
 
 import torch
 import torch.nn as nn
+import os
+CACHE_DIR = os.getenv("LLAMA_PATH", "/extra_disk_1/yozh/LLaMA-65B/transformers_cache")
 
 from gptq import *
 from modelutils import *
@@ -16,7 +18,7 @@ def get_llama(model):
     torch.nn.init.uniform_ = skip
     torch.nn.init.normal_ = skip
     from transformers import LlamaForCausalLM
-    model = LlamaForCausalLM.from_pretrained(model, torch_dtype='auto')
+    model = LlamaForCausalLM.from_pretrained(model, torch_dtype='auto', cache_dir=CACHE_DIR, local_files_only=True)
     model.seqlen = 2048
     return model
 
@@ -88,7 +90,7 @@ def llama_sequential(model, dataloader, dev):
                 gptq[name] = GPTQ(subset[name])
                 gptq[name].quantizer = Quantizer()
                 gptq[name].quantizer.configure(
-                    args.wbits, perchannel=True, sym=args.sym, mse=False
+                    args.wbits, perchannel=True, sym=args.sym, mse=False, qq_bits=args.qq_bits
                 )
 
             def add_batch(name):
@@ -255,6 +257,10 @@ if __name__ == '__main__':
     parser.add_argument(
         '--groupsize', type=int, default=-1,
         help='Groupsize to use for quantization; default uses full row.'
+    )
+    parser.add_argument(
+        '--qq_bits', type=int, default=None,
+        help='Quantization quantization bits'
     )
     parser.add_argument(
         '--sym', action='store_true',
