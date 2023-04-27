@@ -115,11 +115,12 @@ class Quantizer(nn.Module):
             self.zero = self.zero.repeat(tmp)
         
         if self.qq_bits is not None:
-            assert self.sym
-            self.qq = Quantizer(shape=self.scale.shape)
-            self.qq.configure(bits=self.qq_bits, perchannel=False, sym=False, mse=True)
-            self.qq.find_params(self.scale, weight=weight)
-            self.scale = self.qq.quantize(self.scale).reshape_as(self.scale)
+            scale_group16 = self.scale.reshape(-1, 16)  # from [8192, 1] to [512, 16]
+            self.qq = Quantizer(shape=scale_group16.shape)
+            self.qq.configure(bits=self.qq_bits, perchannel=True, sym=False, mse=False)
+            assert self.qq.scale.shape == (scale_group16.shape[0], 1)  # [512, 1]; same for .zero
+            self.qq.find_params(scale_group16, weight=weight)
+            self.scale = self.qq.quantize(scale_group16).reshape_as(self.scale)
             
         if weight:
             shape = [-1] + [1] * (len(shape) - 1)
