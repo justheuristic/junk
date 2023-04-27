@@ -118,8 +118,8 @@ class Quantizer(nn.Module):
             scale_group16 = self.scale.reshape(-1, 16)  # from [8192, 1] to [512, 16]
             self.qq = Quantizer(shape=scale_group16.shape)
             self.qq.configure(bits=self.qq_bits, perchannel=True, sym=False, mse=False)
-            assert self.qq.scale.shape == (scale_group16.shape[0], 1)  # [512, 1]; same for .zero
             self.qq.find_params(scale_group16, weight=weight)
+            assert self.qq.scale.shape == (scale_group16.shape[0], 1)  # [512, 1]; same for .zero
             self.scale = self.qq.quantize(scale_group16).reshape_as(self.scale)
             
         if weight:
