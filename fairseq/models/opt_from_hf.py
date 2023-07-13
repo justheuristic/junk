@@ -7,14 +7,14 @@ import torch.nn.functional as F
 from fairseq.dataclass import FairseqDataclass
 from fairseq.models import register_model, BaseFairseqModel
 from omegaconf import II
-from lean_transformer.models.gpt import LeanGPTModel, LeanGPTConfig
+from transformers import OPTForCausalLM, OPTConfig
 
 
 DEFAULT_MAX_TARGET_POSITIONS = 1024
 
 
 @dataclass
-class LeanTransformerLanguageModelConfig(FairseqDataclass):
+class OPTFairseqModelConfig(FairseqDataclass):
     hf_model_config: str = field(default="./model_config.json", metadata=dict(help="path to a huggingface config json"))
     # options from other parts of the config
     add_bos_token: bool = II("task.add_bos_token")
@@ -23,9 +23,9 @@ class LeanTransformerLanguageModelConfig(FairseqDataclass):
     tpu: bool = II("common.tpu")
 
 
-@register_model("lean_lm", dataclass=LeanTransformerLanguageModelConfig)
+@register_model("opt_from_hf", dataclass=OPTFairseqModelConfig)
 class LeanGPTLanguageModel(BaseFairseqModel):
-    def __init__(self, decoder: LeanGPTModel):
+    def __init__(self, decoder: OPTForCausalLM):
         super().__init__()
         self.decoder = decoder
 
@@ -33,11 +33,11 @@ class LeanGPTLanguageModel(BaseFairseqModel):
     def build_model(cls, args, task):
         """Build a new model instance."""
 
-        config = LeanGPTConfig.from_json_file(args.hf_model_config)
+        config = OPTConfig.from_json_file(args.hf_model_config)
         assert config.pad_token_id == task.source_dictionary.pad(), task.source_dictionary.pad()
         assert config.eos_token_id == task.source_dictionary.eos(), task.source_dictionary.eos()
         assert config.bos_token_id == task.source_dictionary.bos(), task.source_dictionary.bos()
-        model = LeanGPTModel(config)
+        model = OPTForCausalLM(config)
         model.resize_token_embeddings(len(task.source_dictionary))
         return cls(model)
 
