@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from fairseq.dataclass import FairseqDataclass
 from fairseq.models import register_model, BaseFairseqModel
 from omegaconf import II
-from transformers import OPTForCausalLM, OPTConfig
+from fairseq.models.opt.modeling_opt import OPTForCausalLM, OPTConfig
 
 
 DEFAULT_MAX_TARGET_POSITIONS = 1024
