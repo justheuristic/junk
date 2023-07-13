@@ -24,7 +24,7 @@ class OPTFairseqModelConfig(FairseqDataclass):
 
 
 @register_model("opt_from_hf", dataclass=OPTFairseqModelConfig)
-class LeanGPTLanguageModel(BaseFairseqModel):
+class OPTLanguageModel(BaseFairseqModel):
     def __init__(self, decoder: OPTForCausalLM):
         super().__init__()
         self.decoder = decoder
