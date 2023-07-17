@@ -37,6 +37,7 @@ from transformers.utils import (
 )
 from .configuration_opt import OPTConfig
 
+print('NO POSITIONAL ENCODINGS' * 999)
 
 logger = logging.get_logger(__name__)
 
@@ -495,7 +496,7 @@ class OPTDecoder(OPTPreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.word_embed_proj_dim, self.padding_idx)
-        self.embed_positions = OPTLearnedPositionalEmbedding(config.max_position_embeddings, config.hidden_size)
+        #self.embed_positions = OPTLearnedPositionalEmbedding(config.max_position_embeddings, config.hidden_size)
 
         if config.word_embed_proj_dim != config.hidden_size:
             self.project_out = nn.Linear(config.hidden_size, config.word_embed_proj_dim, bias=False)
@@ -650,12 +651,12 @@ class OPTDecoder(OPTPreTrainedModel):
         causal_attention_mask = self._prepare_decoder_attention_mask(
             attention_mask, input_shape, inputs_embeds, past_key_values_length
         )
-        pos_embeds = self.embed_positions(attention_mask, past_key_values_length)
+        #pos_embeds = self.embed_positions(attention_mask, past_key_values_length)
 
         if self.project_in is not None:
             inputs_embeds = self.project_in(inputs_embeds)
 
-        hidden_states = inputs_embeds + pos_embeds
+        hidden_states = inputs_embeds# + pos_embeds
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
