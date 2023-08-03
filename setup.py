@@ -67,26 +67,26 @@ class NumpyExtension(Extension):
 
 
 extensions = [
-    Extension(
-        "fairseq.libbleu",
-        sources=[
-            "fairseq/clib/libbleu/libbleu.cpp",
-            "fairseq/clib/libbleu/module.cpp",
-        ],
-        extra_compile_args=extra_compile_args,
-    ),
-    NumpyExtension(
-        "fairseq.data.data_utils_fast",
-        sources=["fairseq/data/data_utils_fast.pyx"],
-        language="c++",
-        extra_compile_args=extra_compile_args,
-    ),
-    NumpyExtension(
-        "fairseq.data.token_block_utils_fast",
-        sources=["fairseq/data/token_block_utils_fast.pyx"],
-        language="c++",
-        extra_compile_args=extra_compile_args,
-    ),
+#    Extension(
+#        "fairseq.libbleu",
+#        sources=[
+#            "fairseq/clib/libbleu/libbleu.cpp",
+#            "fairseq/clib/libbleu/module.cpp",
+#        ],
+#        extra_compile_args=extra_compile_args,
+#    ),
+#    NumpyExtension(
+#        "fairseq.data.data_utils_fast",
+#        sources=["fairseq/data/data_utils_fast.pyx"],
+#        language="c++",
+#        extra_compile_args=extra_compile_args,
+#    ),
+#    NumpyExtension(
+#        "fairseq.data.token_block_utils_fast",
+#        sources=["fairseq/data/token_block_utils_fast.pyx"],
+#        language="c++",
+#        extra_compile_args=extra_compile_args,
+#    ),
 ]
 
 
@@ -99,55 +99,55 @@ try:
 
     extensions.extend(
         [
-            cpp_extension.CppExtension(
-                "fairseq.libbase",
-                sources=[
-                    "fairseq/clib/libbase/balanced_assignment.cpp",
-                ],
-            )
+   #         cpp_extension.CppExtension(
+   #             "fairseq.libbase",
+   #             sources=[
+   #                 "fairseq/clib/libbase/balanced_assignment.cpp",
+   #             ],
+   #         )
         ]
     )
 
     extensions.extend(
         [
-            cpp_extension.CppExtension(
-                "fairseq.libnat",
-                sources=[
-                    "fairseq/clib/libnat/edit_dist.cpp",
-                ],
-            ),
-            cpp_extension.CppExtension(
-                "alignment_train_cpu_binding",
-                sources=[
-                    "examples/operators/alignment_train_cpu.cpp",
-                ],
-            ),
+            #cpp_extension.CppExtension(
+            #    "fairseq.libnat",
+            #    sources=[
+            #        "fairseq/clib/libnat/edit_dist.cpp",
+            #    ],
+            #),
+            #cpp_extension.CppExtension(
+            #    "alignment_train_cpu_binding",
+            #    sources=[
+            #        "examples/operators/alignment_train_cpu.cpp",
+            #    ],
+            #),
         ]
     )
     if "CUDA_HOME" in os.environ:
         extensions.extend(
             [
-                cpp_extension.CppExtension(
-                    "fairseq.libnat_cuda",
-                    sources=[
-                        "fairseq/clib/libnat_cuda/edit_dist.cu",
-                        "fairseq/clib/libnat_cuda/binding.cpp",
-                    ],
-                ),
-                cpp_extension.CppExtension(
-                    "fairseq.ngram_repeat_block_cuda",
-                    sources=[
-                        "fairseq/clib/cuda/ngram_repeat_block_cuda.cpp",
-                        "fairseq/clib/cuda/ngram_repeat_block_cuda_kernel.cu",
-                    ],
-                ),
-                cpp_extension.CppExtension(
-                    "alignment_train_cuda_binding",
-                    sources=[
-                        "examples/operators/alignment_train_kernel.cu",
-                        "examples/operators/alignment_train_cuda.cpp",
-                    ],
-                ),
+                #cpp_extension.CppExtension(
+                #    "fairseq.libnat_cuda",
+                #    sources=[
+                #        "fairseq/clib/libnat_cuda/edit_dist.cu",
+                #        "fairseq/clib/libnat_cuda/binding.cpp",
+                #    ],
+                #),
+                #cpp_extension.CppExtension(
+                #    "fairseq.ngram_repeat_block_cuda",
+                #    sources=[
+                #        "fairseq/clib/cuda/ngram_repeat_block_cuda.cpp",
+                #        "fairseq/clib/cuda/ngram_repeat_block_cuda_kernel.cu",
+                #    ],
+                #),
+                #cpp_extension.CppExtension(
+                #    "alignment_train_cuda_binding",
+                #    sources=[
+                #        "examples/operators/alignment_train_kernel.cu",
+                #        "examples/operators/alignment_train_cuda.cpp",
+                #    ],
+                #),
             ]
         )
     cmdclass["build_ext"] = cpp_extension.BuildExtension
@@ -209,19 +209,6 @@ def do_setup(package_data):
             "setuptools>=18.0",
         ],
         install_requires=[
-            "cffi",
-            "cython",
-            'dataclasses; python_version<"3.7"',
-            "hydra-core>=1.0.7,<1.1",
-            "omegaconf<2.1",
-            'numpy<1.20.0; python_version<"3.7"',
-            'numpy; python_version>="3.7"',
-            "regex",
-            "sacrebleu>=1.4.12",
-            "torch",
-            "tqdm",
-            "bitarray",
-            "torchaudio>=0.8.0",
         ],
         dependency_links=dependency_links,
         packages=find_packages(
