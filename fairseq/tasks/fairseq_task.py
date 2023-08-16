@@ -19,7 +19,7 @@ from omegaconf import DictConfig
 
 
 logger = logging.getLogger(__name__)
-
+PRINTED = False
 
 class StatefulContainer(object):
     def __init__(self):
@@ -507,8 +507,12 @@ class FairseqTask(object):
         """
         model.train()
         model.set_num_updates(update_num)
+        global PRINTED
+        if not PRINTED and isinstance(optimizer, AMPOptimizer):
+            print("disabling autocast, " * 50)
+            PRINTED = True
         with torch.autograd.profiler.record_function("forward"):
-            with torch.cuda.amp.autocast(enabled=(isinstance(optimizer, AMPOptimizer))):
+            with torch.cuda.amp.autocast(enabled=False):
                 loss, sample_size, logging_output = criterion(model, sample)
         if ignore_grad:
             loss *= 0
