@@ -37,6 +37,7 @@ class QuantizedWeight(nn.Module):
                 num_codebooks=num_codebooks, out_group_size=out_group_size, in_group_size=in_group_size,
                 codebook_size=self.codebook_size, **init_kwargs)
         else:
+            #if init random be carefull with  init_mean=reference_weight.mean() / num_codebooks ** 0.5, init_std=reference_weight.std() / num_codebooks ** 0.5,
             codebooks = torch.randn(
                 num_codebooks, codebook_size, out_group_size, in_group_size, device=device
                 ).mul_(init_std).add_(init_mean)
