@@ -34,7 +34,7 @@ def calculating_XTX(args):
     return XTX
 
 
-def compress_aq(args, reference_weigh):
+def compress_aq(args, reference_weigh,run):
     '''
     Compress W with AQ
     '''
@@ -63,7 +63,7 @@ def compress_aq(args, reference_weigh):
         loss.backward()
         opt.step()
 
-        wandb.log({"loss": loss.item()}, step=epoch)
+        run.log({"loss": loss.item()}, step=epoch)
 
         if epoch % args.print_frequency == 0:
             print(f"loss={loss.item():.10f}\t", f"time_on_epoch {epoch} = {time.perf_counter() - start}")
@@ -79,10 +79,10 @@ def compress_aq(args, reference_weigh):
             )
             if args.sparsity_regularizer != 0:
                 sparsity_rate = ((quantized_layer.codes == 0).sum() / quantized_layer.codes.numel()).item()
-                wandb.log({"sparsity rate": sparsity_rate}, step=epoch)
+                run.log({"sparsity rate": sparsity_rate}, step=epoch)
                 if (epoch + 1) % args.big_beam_search_epochs == 0:
                     mean_code_nbits = sum(get_mean_nbits_by_codebook(quantized_layer.codes)) / args.num_codebooks
-                    wandb.log({"Mean codebook ldngth nbits": mean_code_nbits}, step=epoch)
+                    run.log({"Mean codebook ldngth nbits": mean_code_nbits}, step=epoch)
                     if args.in_group_size > 1 and args.out_group_size > 1:
                         curr_avg_bits = calc_avg_bits(
                             args.num_codebooks,
@@ -92,7 +92,7 @@ def compress_aq(args, reference_weigh):
                             reference_weight.shape[0],
                             reference_weight.shape[1],
                         )
-                        wandb.log({"Avg_bits": curr_avg_bits}, step=epoch)
+                        run.log({"Avg_bits": curr_avg_bits}, step=epoch)
     return quantized_layer
 
 def load_model(args):
@@ -147,7 +147,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_codebooks",
         type=int,
-        default=7,
+        default=10,
         help="#Number of codebooks.",
     )
 
@@ -178,7 +178,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--big_beam_size",
         type=int,
-        default=8,
+        default=6,
         help="Big beam size.",
     )
     parser.add_argument(
@@ -225,7 +225,7 @@ if __name__ == "__main__":
         "--block_number",
         type=int,
         default=10,
-        help="#input group size.",
+        help="number of block of transformer .",
     )
     parser.add_argument("--wandb", action="store_true", help="Whether to use wandb or store locally.")
 
@@ -256,7 +256,7 @@ if __name__ == "__main__":
             + f"_beam_search_epochs_{args.beam_search_epochs}"
             + f"_big_beam_search_epochs_{args.big_beam_search_epochs}"
         )
-        wandb.init(
+        run = wandb.init(
             dir=os.getcwd(),
             config={a: getattr(args, a) for a in dir(args) if not a.startswith("_")},
             settings=wandb.Settings(code_dir="."),
@@ -265,10 +265,10 @@ if __name__ == "__main__":
             entity="rock-and-roll",
         )
 
-        wandb.log({"Avg_bits": estimated_bits_per_param})
+        run.log({"Avg_bits": estimated_bits_per_param})
 
     print("============  Calculating XTX ... ============")
     XTX = calculating_XTX(args)
 
     print("\n============ Quantizing layer... ============")
-    compress_aq(args,reference_weight)
+    compress_aq(args,reference_weight,run)
