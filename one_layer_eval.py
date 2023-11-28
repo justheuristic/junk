@@ -133,6 +133,12 @@ if __name__ == "__main__":
         help="path to llama model to load, as in LlamaForCausalLM.from_pretrained()",
     )
     parser.add_argument(
+        "--block_number",
+        type=int,
+        default=10,
+        help="number of block of transformer .",
+    )
+    parser.add_argument(
         "--num_epochs",
         type=int,
         default=40000,
@@ -221,11 +227,12 @@ if __name__ == "__main__":
         action="store_false",
         help="Init with Kmeans",
     )
+    
     parser.add_argument(
-        "--block_number",
+        "--print_frequency",
         type=int,
         default=10,
-        help="number of block of transformer .",
+        help="Batch size.",
     )
     parser.add_argument("--wandb", action="store_true", help="Whether to use wandb or store locally.")
 
@@ -245,27 +252,27 @@ if __name__ == "__main__":
     estimated_bits_per_param = calc_avg_bits(args.num_codebooks, args.out_group_size, args.in_group_size,
                                                 args.nbits_per_codebook, in_features,out_features)
     print("Estimated bits / param", estimated_bits_per_param)
-    if args.wandb:
-        assert has_wandb, "`wandb` not installed, try pip install `wandb`"
-        args.exp_name = (
-            os.environ.get("WANDB_NAME", "AQ")
-            + f"_num_codebooks_{args.num_codebooks}"
-            + f"_out_group_size_{args.out_group_size}"
-            + f"_in_group_size_{args.in_group_size}"
-            + f"_nbits_per_codebook_{args.nbits_per_codebook}"
-            + f"_beam_search_epochs_{args.beam_search_epochs}"
-            + f"_big_beam_search_epochs_{args.big_beam_search_epochs}"
-        )
-        run = wandb.init(
-            dir=os.getcwd(),
-            config={a: getattr(args, a) for a in dir(args) if not a.startswith("_")},
-            settings=wandb.Settings(code_dir="."),
-            save_code=True,
-            project="AddQuantization",
-            entity="rock-and-roll",
-        )
+    # if args.wandb:
+    assert has_wandb, "`wandb` not installed, try pip install `wandb`"
+    args.exp_name = (
+        os.environ.get("WANDB_NAME", "AQ")
+        + f"_num_codebooks_{args.num_codebooks}"
+        + f"_out_group_size_{args.out_group_size}"
+        + f"_in_group_size_{args.in_group_size}"
+        + f"_nbits_per_codebook_{args.nbits_per_codebook}"
+        + f"_beam_search_epochs_{args.beam_search_epochs}"
+        + f"_big_beam_search_epochs_{args.big_beam_search_epochs}"
+    )
+    run = wandb.init(
+        dir=os.getcwd(),
+        config={a: getattr(args, a) for a in dir(args) if not a.startswith("_")},
+        settings=wandb.Settings(code_dir="."),
+        save_code=True,
+        project="AddQuantization",
+        entity="rock-and-roll",
+    )
 
-        run.log({"Avg_bits": estimated_bits_per_param})
+    run.log({"Avg_bits": estimated_bits_per_param})
 
     print("============  Calculating XTX ... ============")
     XTX = calculating_XTX(args)
