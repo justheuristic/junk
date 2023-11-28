@@ -95,6 +95,27 @@ def compress_aq(args, reference_weigh):
                         wandb.log({"Avg_bits": curr_avg_bits}, step=epoch)
     return quantized_layer
 
+def load_model(args):
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        args.model_path, torch_dtype="auto", low_cpu_mem_usage=True
+    )
+
+    if args.grouped_quant:
+        Q = model.model.layers[args.block_number].self_attn.q_proj.weight.detach()
+        K = model.model.layers[args.block_number].self_attn.k_proj.weight.detach()
+        V = model.model.layers[args.block_number].self_attn.v_proj.weight.detach()
+
+        head_dim = model.config.hidden_size // model.config.num_attention_heads
+        num_repeats = model.config.num_attention_heads // model.config.num_key_value_heads
+        K_repeated = K.reshape(-1, 1, head_dim, K.shape[1]).tile(1, num_repeats, 1, 1).reshape(Q.shape)
+        V_repeated = V.reshape(-1, 1, head_dim, K.shape[1]).tile(1, num_repeats, 1, 1).reshape(Q.shape)
+
+        reference_weight = torch.stack([Q, K_repeated, V_repeated], dim=1).flatten(0, 1).cuda().float()
+    else:
+        reference_weight = model.model.layers[args.block_number].self_attn.q_proj.weight.detach().to(device).float()
+    return model, reference_weight
+
+
 
 if __name__ == "__main__":
     import argparse
@@ -190,7 +211,11 @@ if __name__ == "__main__":
         default=1.0,
         help="Weight for kmeans initialization.",
     )
-
+    parser.add_argument(
+        "--grouped_quant",
+        action="store_True",
+        help="Quantize grouped qkv",
+    )
     parser.add_argument(
         "--kmeans_init",
         action="store_false",
@@ -213,17 +238,13 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print("\n============ Load model... ============")
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype="auto", low_cpu_mem_usage=True
-    )
-    reference_weight = model.model.layers[args.block_number].self_attn.q_proj.weight.detach().to(device).float()
-    del model
+    model, reference_weight = load_model(args)
+
 
     in_features, out_features  = reference_weight.shape[0],reference_weight.shape[1]
     estimated_bits_per_param = calc_avg_bits(args.num_codebooks, args.out_group_size, args.in_group_size,
                                                 args.nbits_per_codebook, in_features,out_features)
     print("Estimated bits / param", estimated_bits_per_param)
-
     if args.wandb:
         assert has_wandb, "`wandb` not installed, try pip install `wandb`"
         args.exp_name = (
