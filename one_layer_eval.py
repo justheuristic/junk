@@ -35,6 +35,9 @@ def calculating_XTX(args):
 
 
 def compress_aq(args, reference_weigh):
+    '''
+    Compress W with AQ
+    '''
     quantized_layer = QuantizedWeight(
         weight_shape=reference_weight.shape,
         num_codebooks=args.num_codebooks,
@@ -44,7 +47,7 @@ def compress_aq(args, reference_weigh):
         device=device,
         init_kmeans=args.kmeans_init,
         reference_weight=reference_weight,
-        alpha=1.0,
+        alpha=args.alpha,
         verbose=True,
     )
 
@@ -100,6 +103,11 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "model_path",
+        type=str,
+        help="path to llama model to load, as in LlamaForCausalLM.from_pretrained()",
+    )
+    parser.add_argument(
+        "input_loading_dir",
         type=str,
         help="path to llama model to load, as in LlamaForCausalLM.from_pretrained()",
     )
