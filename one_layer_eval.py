@@ -202,6 +202,7 @@ if __name__ == "__main__":
         default=10,
         help="#input group size.",
     )
+    parser.add_argument("--wandb", action="store_true", help="Whether to use wandb or store locally.")
 
     args = parser.parse_args()
 
