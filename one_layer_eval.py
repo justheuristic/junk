@@ -263,8 +263,11 @@ if __name__ == "__main__":
         + f"_beam_search_epochs_{args.beam_search_epochs}"
         + f"_big_beam_search_epochs_{args.big_beam_search_epochs}"
     )
+    args.Avg_bits = estimated_bits_per_param
+    
     run = wandb.init(
         dir=os.getcwd(),
+        name = args.exp_name,
         config={a: getattr(args, a) for a in dir(args) if not a.startswith("_")},
         settings=wandb.Settings(code_dir="."),
         save_code=True,
