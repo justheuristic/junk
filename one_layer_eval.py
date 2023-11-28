@@ -213,7 +213,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--grouped_quant",
-        action="store_True",
+        action="store_true",
         help="Quantize grouped qkv",
     )
     parser.add_argument(
