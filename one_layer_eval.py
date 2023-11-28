@@ -264,7 +264,8 @@ if __name__ == "__main__":
         + f"_big_beam_search_epochs_{args.big_beam_search_epochs}"
     )
     args.Avg_bits = estimated_bits_per_param
-    
+    args.group_size = args.in_group_size*args.out_group_size
+
     run = wandb.init(
         dir=os.getcwd(),
         name = args.exp_name,
