@@ -1,11 +1,9 @@
-import torch 
-from src.aq import QuantizedWeight, _reconstruct_weight  # see adjacent file (aq.py)
-
 import math
-from typing import NamedTuple, Optional, Union
 
 import torch
 from tqdm.auto import trange
+
+from src.aq import QuantizedWeight, _reconstruct_weight  # see adjacent file (aq.py)
 
 
 class GPTAQUtil:
@@ -35,31 +33,10 @@ class GPTAQUtil:
         self,
         *,
         verbose=True,
-        save_quantization: bool = False,
         args,
         **kwargs,
     ) -> QuantizedWeight:
         """
-        :param bits: number of bits used at the lowest level (the full model size will be different!)
-        :param blocksize: take blocks of this many input features at a time for GPTQ
-        :note: blocksize affects runtime and memory, but does not affect the resulting matrix (up to machine precision)
-        :param groupsize: fit quantization scaling / statistics to each group of this many input features
-        :param percdamp: relative regularizer added to hessian diagonal before inversion
-        :note: if groupsize_in_dim* is None, use the same quantization statistics across all input features
-        :param keep_last_columns: if not None, keep the last (this many) input features un_quantized and return them
-        :note: the un-quantized columns will be a part of the first returned result
-        :param outlier_relative_threshold: threshold used for *UNSTRUCTURED* outliers, relative to
-        :note: if keep_last_columns > 0, quantized_dequantized_weights[-keep_last_columns:] will be non-quantized
-        :param permutation_order: re-order input features using a certain policy
-        :param keep_H: if False, delete the accumulated hessian during quantize; if False, keep the accumulated hessian
-        :param simplified_outliers: if True,do not perform leave-one-out evaluation when detecting outliers;
-            works faster, but generally worse in perplexity
-        :param verbose: if True, display a tqdm progressbar over input columns
-        :param sym: if True, base weight quantization is symmetric
-        :param perchannel: if True, base weight quantization will learn statistics for each output dimension separately
-        :return: a QuantizationResult tuple that contains(
-            weight, perm, _unused, _unused, _unused, _unused, quantization_errors, outlier_unstructured_mask
-        ), see class QuantizationResult below for details
         """
         quantized_layer = QuantizedWeight(
             weight_shape=self.layer.shape,
@@ -83,10 +60,10 @@ class GPTAQUtil:
             opt.zero_grad()
             loss.backward()
             opt.step()
-            if epoch % args.print_frequency == 0:
+            if epoch % args.print_frequency == 0 and verbose:
                 print(f"loss={loss.item():.10f}\t")
             if (epoch + 1) % args.beam_search_epochs == 0:
-                if (epoch + 1) % args.big_beam_search_epochs == 0:
+                if (epoch + 1) % args.big_beam_search_epochs == 0 and verbose:
                     print("BIG beam search")
                 quantized_layer.requantize_(
                     self.H,
