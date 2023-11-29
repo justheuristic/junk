@@ -40,14 +40,14 @@ class GPTAQUtil:
         """
         """
         quantized_layer = QuantizedWeight(
-            weight_shape=self.layer.shape,
+            weight_shape=self.layer.weight.data.shape,
             num_codebooks=args.num_codebooks,
             nbits_per_codebook=args.nbits_per_codebook,
             out_group_size=args.out_group_size,
             in_group_size=args.in_group_size,
             device=self.dev,
             init_kmeans=args.kmeans_init,
-            reference_weight=self.layer,
+            reference_weight=self.layer.weight.data,
             alpha=args.alpha,
             verbose=True,
         )
@@ -56,7 +56,7 @@ class GPTAQUtil:
 
         for epoch in trange(args.num_epochs):
             reconstructed_weight = _reconstruct_weight(quantized_layer.codes, quantized_layer.codebooks)
-            delta_weight = (reconstructed_weight - self.layer).double()
+            delta_weight = (reconstructed_weight - self.layer.weight.data).double()
             loss = (delta_weight @ self.H.double()).flatten() @ delta_weight.flatten() / len(delta_weight)
             opt.zero_grad()
             loss.backward()
@@ -68,7 +68,7 @@ class GPTAQUtil:
                     print("BIG beam search")
                 quantized_layer.requantize_(
                     self.H,
-                    self.layer,
+                    self.layer.weight.data,
                     beam_size=args.beam_size if (epoch + 1) % args.big_beam_search_epochs != 0 else args.big_beam_size,
                     sparsity_regularizer=args.sparsity_regularizer,
                     # tip: use const_hparam * quantized_layer.codes.numel()
