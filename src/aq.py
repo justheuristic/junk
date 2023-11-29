@@ -231,8 +231,8 @@ def _beam_search_squared_errors(
     :param input_group_index: an index of one group of in_features that is being re-encoded
     :param codebook_index: an index of one codebook for that group of features that is being re-encoded
     :return: tuple(Tensor, Tensor) of 3d tensor of shape = [beam_size, k_best, num_out_groups].
-        First one is float tensor of k_best square errors for each beam and out_group
-        Second one is int64 tensor of corresponding indices along codebook_size
+        First one is float tensor of losses of k_best lowest square errors for each beam and out_group
+        Second one is int64 tensor of indices of k_best lowest square errors for each beam and out_group
     """
     num_codebooks, codebook_size, out_group_size, in_group_size = codebooks.shape
     beam_size, num_out_groups, num_in_groups, num_codebooks = beam_codes.shape
@@ -313,8 +313,10 @@ def _beam_search_select_best(
     :param codebooks: a tensor with look-up tables of codes, shape: [num_codebooks, codebook_size, out_group_size, in_group_size]
     :param input_group_index: an index of one group of in_features that is being re-encoded
     :param codebook_index: an index of one codebook for that group of features that is being re-encoded
-    :param best_losses: a 3d tensor of losses, shape = [beam_size, k_best, num_out_groups]
-    :param best_indices: a 3d tensor of indices along codebook_size, shape = [beam_size, k_best, num_out_groups]
+    :param best_losses: a 3d tensor of losses of k_best lowest square errors for each beam and out group,
+        shape = [beam_size, k_best, num_out_groups] 
+    :param best_indices: a 3d tensor of indices of k_best lowest square errors for each beam and out group,
+        shape = [beam_size, k_best, num_out_groups]
     :param beam_size: how many top hypotheses should be selected
 
     :returns: new (beam_codes, beam_weights, beam_losses)
