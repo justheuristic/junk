@@ -140,18 +140,18 @@ def beam_search_optimal_codes(
         for codebook_index in range(num_codebooks):
             ### part 1: compute losses for every possible candidate for one given codebook and input group.
             # Currently, we compute errors for all output features in parallel in a vectorized fashion.
-            candidate_losses = _beam_search_squared_errors(
+            best_squared_errors, best_indices = _beam_search_squared_errors(
                 XTX=XTX, reference_weight=reference_weight, codebooks=codebooks,
                 beam_losses=beam_losses, beam_codes=beam_codes, beam_weights=beam_weights,
                 input_group_index=input_group_index, codebook_index=codebook_index,
-                sparsity_regularizer=sparsity_regularizer
+                k_best=beam_size,sparsity_regularizer=sparsity_regularizer
             )  # [current beam_size, codebook_size, num_out_groups]
 
             # part 2: select beam_size new best codes and re-arrange beam to account for the fact that ...
             # ... sometimes two or more top candidates originate from the same source in previous beam
             beam_codes, beam_weights, beam_losses = _beam_search_select_best(
                 beam_codes, beam_weights, codebooks,
-                input_group_index, codebook_index, candidate_losses,
+                input_group_index, codebook_index, best_squared_errors, best_indices,
                 beam_size
             )
 
@@ -214,8 +214,8 @@ def _reconstruct_weight(codes: torch.IntTensor, codebooks: torch.Tensor) -> torc
 def _beam_search_squared_errors(
         XTX: torch.Tensor, reference_weight: torch.Tensor, codebooks: torch.Tensor,
         beam_losses: torch.Tensor, beam_codes: torch.Tensor, beam_weights: torch.Tensor,
-        input_group_index: int, codebook_index: int, sparsity_regularizer: float,
-) -> torch.Tensor:
+        input_group_index: int, codebook_index: int, k_best :int, sparsity_regularizer: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Compute MSE or sum-of-squared-error losses for all possible ways to replace quantization codes for one input group
      and one codebook. Works in parallel for all output-dimension groups.
@@ -230,7 +230,9 @@ def _beam_search_squared_errors(
     :param beam_weights: a tensor with de-quantized beam_codes, shape: [beam_size, out_features, in_features]
     :param input_group_index: an index of one group of in_features that is being re-encoded
     :param codebook_index: an index of one codebook for that group of features that is being re-encoded
-    :return: 3d tensor of losses, shape = [beam_size, codebook_size, num_out_groups]
+    :return: tuple(Tensor, Tensor) of 3d tensor of shape = [beam_size, k_best, num_out_groups].
+        First one is float tensor of losses of k_best lowest square errors for each beam and out_group
+        Second one is int64 tensor of indices of k_best lowest square errors for each beam and out_group
     """
     num_codebooks, codebook_size, out_group_size, in_group_size = codebooks.shape
     beam_size, num_out_groups, num_in_groups, num_codebooks = beam_codes.shape
@@ -257,41 +259,52 @@ def _beam_search_squared_errors(
     # dWTXTX is equivalent to < X @ (W - \sum BiCi except current codebook), X @ SOMETHING >
     dWTXTXg = delta_weight_without_part @ XTX[..., input_group_slice]  # [beam_size, out_features, in_group_size]
     # below: use torch.matmul to compute broadcasted batch matrix multiplication; see matmul docs
-
-    dot_products = torch.matmul(
-        dWTXTXg.view(beam_size, 1, num_out_groups, 1, out_group_size * in_group_size),
-        delta_weights.view(beam_size, codebook_size, num_out_groups, out_group_size * in_group_size, 1),
-    ).reshape(beam_size, codebook_size, num_out_groups)
-
-    # step 2: compute
-    XoldBkC_norms_sq = torch.bmm(
-        (prev_weight_part @ XTX[input_group_slice, input_group_slice]).view(
-            beam_size * num_out_groups, 1, out_group_size * in_group_size),
-        prev_weight_part.view(beam_size * num_out_groups, out_group_size * in_group_size, 1)
-    ).reshape(beam_size, 1, num_out_groups)
-
+    
     XnewBkC_norms_sq = torch.bmm(
         (cand_weights.flatten(0, 1) @ XTX[input_group_slice, input_group_slice]).view(
             codebook_size, 1, out_group_size * in_group_size),
         cand_weights.view(codebook_size, out_group_size * in_group_size, 1)
-    ).reshape(1, codebook_size, 1)
+    ).reshape(codebook_size, 1)
 
-    candidate_squared_errors = (
-            beam_losses[:, None, :] - 2 * dot_products + XnewBkC_norms_sq - XoldBkC_norms_sq
-    )  # shape: [beam_size, codebook_size, num_out_groups]
+    best_squared_errors = torch.empty(
+        (beam_size, k_best, num_out_groups), dtype=XTX.dtype, device=XTX.device
+    )  # shape: [beam_size, k_best, num_out_groups]
+    best_indices = torch.empty(
+        (beam_size, k_best, num_out_groups), dtype=torch.int64, device=XTX.device,
+    )
+    for beam_id in range(beam_size):
+        dot_products = torch.matmul(
+            dWTXTXg.view(beam_size, 1, num_out_groups, 1, out_group_size * in_group_size)[beam_id],
+            delta_weights.view(beam_size, codebook_size, num_out_groups, out_group_size * in_group_size, 1)[beam_id],
+        ).reshape(codebook_size, num_out_groups)
 
-    if sparsity_regularizer != 0:
-        candidate_squared_errors += sparsity_regularizer * (prev_codes_part == 0).to(XTX.dtype)[:, None, :]
-        candidate_squared_errors[:, 0, :] -= sparsity_regularizer
+        # step 2: compute
+        XoldBkC_norms_sq = torch.bmm(
+            (prev_weight_part[beam_id] @ XTX[input_group_slice, input_group_slice]).view(
+                num_out_groups, 1, out_group_size * in_group_size),
+            prev_weight_part[beam_id].view(num_out_groups, out_group_size * in_group_size, 1)
+        ).reshape(1, num_out_groups)
 
-    return candidate_squared_errors
+        candidate_squared_errors = (
+                beam_losses[beam_id, None, :] - 2 * dot_products + XnewBkC_norms_sq - XoldBkC_norms_sq
+        )  # shape: [codebook_size, num_out_groups]
+
+        if sparsity_regularizer != 0:
+            candidate_squared_errors += sparsity_regularizer * (prev_codes_part[beam_id] == 0).to(XTX.dtype)[None, :]
+            candidate_squared_errors[0, :] -= sparsity_regularizer
+            
+        best_beam_squared_errors, best_beam_indices = torch.topk(candidate_squared_errors, k_best, dim=0, largest=False, sorted=False)
+        best_squared_errors[beam_id] = best_beam_squared_errors
+        best_indices[beam_id] = best_beam_indices
+
+    return best_squared_errors, best_indices
 
 
 @maybe_script
 def _beam_search_select_best(
         beam_codes: torch.Tensor, beam_weights: torch.Tensor, codebooks: torch.Tensor,
-        input_group_index: int, codebook_index: int, candidate_losses: torch.Tensor,
-        beam_size: int,
+        input_group_index: int, codebook_index: int, best_losses: torch.Tensor,
+        best_indices: torch.Tensor, beam_size: int,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Select top-:beam_size: and reorder beam accordingly, return new beam
@@ -300,19 +313,22 @@ def _beam_search_select_best(
     :param codebooks: a tensor with look-up tables of codes, shape: [num_codebooks, codebook_size, out_group_size, in_group_size]
     :param input_group_index: an index of one group of in_features that is being re-encoded
     :param codebook_index: an index of one codebook for that group of features that is being re-encoded
-    :param candidate_losses: a 3d tensor of losses, shape = [beam_size, codebook_size, nun_out_groups]
+    :param best_losses: a 3d tensor of losses of k_best lowest square errors for each beam and out group,
+        shape = [beam_size, k_best, num_out_groups] 
+    :param best_indices: a 3d tensor of indices of k_best lowest square errors for each beam and out group,
+        shape = [beam_size, k_best, num_out_groups]
     :param beam_size: how many top hypotheses should be selected
 
     :returns: new (beam_codes, beam_weights, beam_losses)
     """
-    dtype = candidate_losses.dtype
-    device = candidate_losses.device
-    _prev_beam_size, codebook_size, num_out_groups = candidate_losses.shape
+    dtype = best_losses.dtype
+    device = best_losses.device
+    _prev_beam_size, k_best, num_out_groups = best_losses.shape
     _prev_beam_size, out_features, in_features = beam_weights.shape
     _prev_beam_size, num_out_groups, num_in_groups, num_codebooks = beam_codes.shape
-    flat_best = candidate_losses.flatten(0, 1).topk(dim=0, k=beam_size, largest=False)
-    best_hypo_source_ids = flat_best.indices // codebook_size
-    best_hypo_codes = flat_best.indices % codebook_size
+    flat_best = best_losses.flatten(0, 1).topk(dim=0, k=beam_size, largest=False)
+    best_hypo_source_ids = flat_best.indices // k_best
+    best_hypo_codes = best_indices.flatten(0, 1)[flat_best.indices,torch.arange(num_out_groups)].reshape(beam_size, out_features)
     # ^-- shape: [beam_size, out_features]
 
     # reorder beam codes and weights
