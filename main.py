@@ -60,7 +60,7 @@ def get_inps(model, data_iterable, args, dev, nsamples=None):
 
         def batch_generator(testenc, seqlen, nsamples):
             for i in range(nsamples):
-                batch = testenc[:, (i * seqlen) : ((i + 1) * seqlen)].to(dev)
+                batch = testenc[:, (i * seqlen): ((i + 1) * seqlen)].to(dev)
                 yield batch
 
         data_iterable = batch_generator(data_iterable, model.seqlen, nsamples)
@@ -139,7 +139,8 @@ def quantize_gptaq(model, dataloader, args, device):
     save = getattr(args, "save", False)
 
     quantizers = {}
-
+    overall_bits = 0
+    model_number_of_params = 0
     layers = get_layers(model)
     for i in range(len(layers)):
         print(f"\n---------------- Layer {i} of {len(layers)} ----------------")
@@ -174,6 +175,7 @@ def quantize_gptaq(model, dataloader, args, device):
             def add_batch(name):
                 def tmp(_, inp, out):
                     gptaq_handlers[name].add_batch(inp[0].data)  # noqa: F821
+
                 return tmp
 
             handles = []
@@ -202,6 +204,10 @@ def quantize_gptaq(model, dataloader, args, device):
                 gptaq_handlers[sublayer_name].layer.weight.data = _reconstruct_weight(
                     quantized.codes, quantized.codebooks
                 ).to(gptaq_handlers[sublayer_name].layer.weight.data.dtype)
+                overall_bits += torch.numel(quantized.codes) * args.nbits_per_codebook + torch.numel(
+                    quantized.codebooks) * 16
+                model_number_of_params += torch.numel(gptaq_handlers[sublayer_name].layer.weight.data)
+                print("curent_avg_bits", overall_bits/model_number_of_params)
                 quantizers["model.layers.%d.%s" % (i, sublayer_name)] = ()  # to be updated
 
         out_losses = []
@@ -245,7 +251,7 @@ def quantize_gptaq(model, dataloader, args, device):
 
     if args.wandb:
         wandb.log({"max_cuda_mem_quantize": round(torch.cuda.max_memory_allocated() / 1e9, 2)})
-
+        wandb.log({"Avg_bits": overall_bits/model_number_of_params})
     model.config.use_cache = use_cache
     print(f"quantize: {torch.cuda.max_memory_allocated()=:,}")
     return quantizers
@@ -287,7 +293,7 @@ def perplexity_eval(model, testenc, args, dev):
     for i in range(nsamples):
         lm_logits = get_lm_logits(inps[i].to(dev), model)
         shift_logits = lm_logits[:, :-1, :].contiguous()
-        shift_labels = testenc[:, (i * model.seqlen) : ((i + 1) * model.seqlen)][:, 1:]
+        shift_labels = testenc[:, (i * model.seqlen): ((i + 1) * model.seqlen)][:, 1:]
         loss_fct = nn.CrossEntropyLoss()
         loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
         neg_log_likelihood = loss.float() * model.seqlen
@@ -459,13 +465,13 @@ if __name__ == "__main__":
     if args.wandb:
         assert has_wandb, "`wandb` not installed, try pip install `wandb`"
         args.exp_name = (
-            os.environ.get("WANDB_NAME", "AQ")
-            + f"_num_codebooks_{args.num_codebooks}"
-            + f"_out_group_size_{args.out_group_size}"
-            + f"_in_group_size_{args.in_group_size}"
-            + f"_nbits_per_codebook_{args.nbits_per_codebook}"
-            + f"_beam_search_epochs_{args.beam_search_epochs}"
-            + f"_big_beam_search_epochs_{args.big_beam_search_epochs}"
+                os.environ.get("WANDB_NAME", "AQ")
+                + f"_num_codebooks_{args.num_codebooks}"
+                + f"_out_group_size_{args.out_group_size}"
+                + f"_in_group_size_{args.in_group_size}"
+                + f"_nbits_per_codebook_{args.nbits_per_codebook}"
+                + f"_beam_search_epochs_{args.beam_search_epochs}"
+                + f"_big_beam_search_epochs_{args.big_beam_search_epochs}"
         )
         args.group_size = args.in_group_size * args.out_group_size
 
