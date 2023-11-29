@@ -341,6 +341,11 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0, help="Seed for sampling the calibration data.")
     parser.add_argument("--nsamples", type=int, default=128, help="Number of calibration data samples.")
     parser.add_argument(
+        "--skip_out_loss",
+        action="store_true",
+        help="Whether to skip computation of out loss.",
+    )
+    parser.add_argument(
         "--offload_activations",
         action="store_true",
         help="Offload activations to RAM to save GPU memory.",
