@@ -30,6 +30,7 @@ class GPTAQUtil:
         inp = math.sqrt(2 / self.nsamples) * inp.float()
         self.H += inp.matmul(inp.t())
 
+    @torch.enable_grad()
     def quantize(
         self,
         *,
