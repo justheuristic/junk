@@ -17,8 +17,10 @@ from src.modelutils import (
     get_model_head,
     get_sequential_groups,
 )
+from gptaq_engine import GPTAQUtil
+from src.aq import _reconstruct_weight
 
-from src.utils import calc_avg_bits, get_mean_nbits_by_codebook  # see adjacent file (aq.py)
+from src.utils import calc_avg_bits
 
 try:
     import wandb
@@ -126,9 +128,134 @@ def get_inps(model, data_iterable, args, dev, nsamples=None):
     forward_args = {k: cache[k] for k in forward_arg_names}
     return inps, forward_args
 
+@torch.no_grad()
+def quantize_gptaq(model, dataloader, args, device):
+    print("\nStarting SPQR quantization ...")
+
+    inps, forward_args = get_inps(model, dataloader, args, dev="cpu" if args.offload_activations else device)
+    outs = torch.zeros_like(inps)
+
+    use_cache = model.config.use_cache
+    model.config.use_cache = False
+    save = getattr(args, "save", False)
+
+    quantizers = {}
+
+    normal_outlier_count_global, w_count_global = 0, 0
+
+    layers = get_layers(model)
+    for i in range(len(layers)):
+        print(f"\n---------------- Layer {i} of {len(layers)} ----------------")
+        normal_outlier_count, w_count = 0, 0
+        stats_payload = {}
+        start_time = time.time()
+
+        layer_dev_original = next(layers[i].parameters()).device  # quantized layer will return there
+        print(f"{layer_dev_original=}")
+        if layer_dev_original.type != "cuda":
+            layer = layers[i].to(device)
+        else:
+            layer = layers[i]
+        layer_dev = next(layers[i].parameters()).device
+        all_sublayers = find_sublayers(layer)
+
+        for k, v in forward_args.items():
+            forward_args[k] = v.to(layer_dev) if isinstance(v, torch.Tensor) else v
+
+        if args.true_sequential:
+            sequential = get_sequential_groups(model)
+        else:
+            sequential = [list(all_sublayers.keys())]
+
+        for names in sequential:
+            subset = {n: all_sublayers[n] for n in names}
+
+            gptaq_handlers = {}
+            for sublayer_name in subset:
+                gptaq_handlers[sublayer_name] = GPTAQUtil(subset[sublayer_name])
+
+            def add_batch(name):
+                def tmp(_, inp, out):
+                    gptaq_handlers[name].add_batch(inp[0].data)  # noqa: F821
+
+                return tmp
+
+            handles = []
+            for sublayer_name in subset:
+                handles.append(subset[sublayer_name].register_forward_hook(add_batch(sublayer_name)))
+            for j in trange(args.nsamples, desc="calc outs before quantization", leave=False):
+                outs[j] = layer(inps[j].to(layer_dev).unsqueeze(0), **forward_args)[0]
+                if args.offload_activations:
+                    outs[j] = outs[j].cpu()
+            for h in handles:
+                h.remove()
+
+            torch.cuda.empty_cache()
+
+            for sublayer_name in subset:
+                print(f"Quantizing module {sublayer_name} of layer {i}")
+                quantized = gptaq_handlers[sublayer_name].quantize(
+                    args=args,
+                    verbose = True,
+                    save_quantization =False,
+                )
+
+                if save:
+                    print("saving is not implemented")
+
+                gptaq_handlers[sublayer_name].layer.weight.data =  _reconstruct_weight(quantized.codes, quantized.codebooks).to(
+                    gptaq_handlers[sublayer_name].layer.weight.data.dtype
+                )
+                quantizers["model.layers.%d.%s" % (i, sublayer_name)] = ()  # to be updated
+
+        out_losses = []
+        for j in trange(args.nsamples, desc="calc outs after quantization", leave=False):
+            outs_batch = layer(inps[j].to(layer_dev).unsqueeze(0), **forward_args)[0]
+            if not args.skip_out_loss:
+                outs_batch_loss = (
+                    (outs_batch - outs[j].to(layer_dev))
+                    .float()
+                    .square()
+                    .view(outs_batch.shape[0], -1)
+                    .mean(dim=1)
+                    .sqrt()
+                )
+                outs_batch_loss /= outs_batch.view(outs_batch.shape[0], -1).float().std(dim=1)
+                out_losses.append(outs_batch_loss.item())
+            outs[j] = outs_batch
+            if args.offload_activations:
+                outs[j] = outs[j].cpu()
+        del outs_batch
+
+        layers[i] = layer.to(layer_dev_original)
+        del layer
+        del gptaq_handlers
+        torch.cuda.empty_cache()
+
+        inps, outs = outs, inps
+
+        # Logging
+        stats_payload["layer_time"] = time.time() - start_time
+        stats_payload["Step"] = i
+
+        normal_outlier_count_global += normal_outlier_count
+        w_count_global += w_count
+
+        print(stats_payload)
+
+    print("=====================\nFinal stats:")
+    if save:
+        print("Saving not implemented")
+
+    if args.wandb:
+        wandb.log({"max_cuda_mem_quantize": round(torch.cuda.max_memory_allocated() / 1e9, 2)})
+
+    model.config.use_cache = use_cache
+    print(f"quantize: {torch.cuda.max_memory_allocated()=:,}")
+    return quantizers
 
 @torch.no_grad()
-def perplexity_eval(model, testenc, args, dev, run):
+def perplexity_eval(model, testenc, args, dev):
     print(f"\nEvaluating perplexity for {args.dataset_name} dataset ...")
 
     nsamples = testenc.numel() // model.seqlen
@@ -174,7 +301,7 @@ def perplexity_eval(model, testenc, args, dev, run):
     get_model_head(model).to(torch.device("cpu"))
 
     if args.wandb:
-        run.log({args.dataset_name: ppl.item()})
+        wandb.log({args.dataset_name: ppl.item()})
 
     model.config.use_cache = use_cache
 
@@ -205,6 +332,15 @@ if __name__ == "__main__":
         "--new_eval",
         action="store_true",
         help="if this is set, evaluate on new (and slightly more realistic!) val dataset versions",
+    )
+    parser.add_argument("--load", type=str, default=None, help="Path to load quantized statistics.")
+    parser.add_argument("--save", type=str, default=False, help="Path to save quantized statistics.")
+    parser.add_argument("--seed", type=int, default=0, help="Seed for sampling the calibration data.")
+    parser.add_argument("--nsamples", type=int, default=128, help="Number of calibration data samples.")
+    parser.add_argument(
+        "--offload_activations",
+        action="store_true",
+        help="Offload activations to RAM to save GPU memory.",
     )
     parser.add_argument(
         "--num_epochs",
@@ -326,7 +462,7 @@ if __name__ == "__main__":
         )
         args.group_size = args.in_group_size * args.out_group_size
 
-        run = wandb.init(
+        wandb.init(
             dir=os.getcwd(),
             name=args.exp_name,
             config={a: getattr(args, a) for a in dir(args) if not a.startswith("_")},
@@ -339,6 +475,7 @@ if __name__ == "__main__":
     torch.set_num_threads(16)
     torch.backends.cudnn.allow_tf32 = False
     torch.backends.cuda.matmul.allow_tf32 = False
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print("\n============ Load model... ============")
@@ -364,7 +501,7 @@ if __name__ == "__main__":
             eval_mode=True,
         )
         args.dataset_name = dataset
-        perplexity_eval(model, testloader, args, device,run)
+        perplexity_eval(model, testloader, args, device,wndb)
 
     print(f"eval: {torch.cuda.max_memory_allocated()=:,}")
     if args.wandb:
