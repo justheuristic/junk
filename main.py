@@ -340,9 +340,19 @@ if __name__ == "__main__":
         help="Offload activations to RAM to save GPU memory.",
     )
     parser.add_argument(
+        "--true-sequential",
+        action="store_true",
+        help="Whether to run in true sequential model.",
+    )
+    parser.add_argument(
+        "--grouping",
+        action="store_true",
+        help="Whether to run in true sequential model.",
+    )
+    parser.add_argument(
         "--num_epochs",
         type=int,
-        default=40000,
+        default=500,
         help="Number of epochs.",
     )
     parser.add_argument(
