@@ -41,7 +41,7 @@ def get_model(model_path, load_quantized=None, dtype="auto"):
             local_files_only=True,
         )
     # Please verify correcttess #TODO
-    model.seqlen = 4096
+    model.seqlen = 2048
 
     print("Model loaded sucessfully ...")
 

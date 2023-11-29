@@ -129,7 +129,7 @@ def get_inps(model, data_iterable, args, dev, nsamples=None):
 
 @torch.no_grad()
 def quantize_gptaq(model, dataloader, args, device):
-    print("\nStarting SPQR quantization ...")
+    print("\nStarting GPTAQ quantization ...")
 
     inps, forward_args = get_inps(model, dataloader, args, dev="cpu" if args.offload_activations else device)
     outs = torch.zeros_like(inps)
