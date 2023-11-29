@@ -12,8 +12,8 @@ class GPTAQUtil:
     def __init__(self, layer):
         self.layer = layer
         self.dev = layer.weight.device
-        self.H = torch.zeros((self.columns, self.columns), device=self.dev)
         self.columns = self.layer.weight.data.shape[1]
+        self.H = torch.zeros((self.columns, self.columns), device=self.dev)
         self.nsamples = 0
 
     def add_batch(self, inp):
