@@ -1,12 +1,15 @@
 import os
 import time
-from tqdm.auto import trange
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from tqdm import trange
+from tqdm.auto import trange
 
+from gptaq_engine import GPTAQUtil
+from src.aq import _reconstruct_weight
 from src.datautils import get_loaders
 from src.modelutils import (
     FALCON_TYPES,
@@ -17,9 +20,6 @@ from src.modelutils import (
     get_model_head,
     get_sequential_groups,
 )
-from gptaq_engine import GPTAQUtil
-from src.aq import _reconstruct_weight
-
 from src.utils import calc_avg_bits
 
 try:
@@ -33,21 +33,19 @@ except ModuleNotFoundError:
 def quantize_model(model, args, device):
     """main entry point to functions for model quantization"""
     tick = time.time()
-    if args.wbits == 16:
-        print("not quantizing the model with args.wbits=16", flush=True)
-        results = None, args.wbits
-    else:
-        print("Loading data ...")
-        dataloader = get_loaders(
-            args.dataset,
-            nsamples=args.nsamples,
-            seed=args.seed,
-            model_path=args.model_path,
-            seqlen=model.seqlen,
-        )
-        results = quantize_gptaq(model, dataloader, args, device)
+
+    print("Loading data ...")
+    dataloader = get_loaders(
+        args.dataset,
+        nsamples=args.nsamples,
+        seed=args.seed,
+        model_path=args.model_path,
+        seqlen=model.seqlen,
+    )
+    results = quantize_gptaq(model, dataloader, args, device)
     print(f"quantization time: {time.time() - tick:.1f}")
     return results
+
 
 @torch.no_grad()
 def get_inps(model, data_iterable, args, dev, nsamples=None):
@@ -128,6 +126,7 @@ def get_inps(model, data_iterable, args, dev, nsamples=None):
     forward_args = {k: cache[k] for k in forward_arg_names}
     return inps, forward_args
 
+
 @torch.no_grad()
 def quantize_gptaq(model, dataloader, args, device):
     print("\nStarting SPQR quantization ...")
@@ -140,8 +139,6 @@ def quantize_gptaq(model, dataloader, args, device):
     save = getattr(args, "save", False)
 
     quantizers = {}
-
-    normal_outlier_count_global, w_count_global = 0, 0
 
     layers = get_layers(model)
     for i in range(len(layers)):
@@ -177,7 +174,6 @@ def quantize_gptaq(model, dataloader, args, device):
             def add_batch(name):
                 def tmp(_, inp, out):
                     gptaq_handlers[name].add_batch(inp[0].data)  # noqa: F821
-
                 return tmp
 
             handles = []
@@ -196,16 +192,16 @@ def quantize_gptaq(model, dataloader, args, device):
                 print(f"Quantizing module {sublayer_name} of layer {i}")
                 quantized = gptaq_handlers[sublayer_name].quantize(
                     args=args,
-                    verbose = True,
-                    save_quantization =False,
+                    verbose=True,
+                    save_quantization=False,
                 )
 
                 if save:
                     print("saving is not implemented")
 
-                gptaq_handlers[sublayer_name].layer.weight.data =  _reconstruct_weight(quantized.codes, quantized.codebooks).to(
-                    gptaq_handlers[sublayer_name].layer.weight.data.dtype
-                )
+                gptaq_handlers[sublayer_name].layer.weight.data = _reconstruct_weight(
+                    quantized.codes, quantized.codebooks
+                ).to(gptaq_handlers[sublayer_name].layer.weight.data.dtype)
                 quantizers["model.layers.%d.%s" % (i, sublayer_name)] = ()  # to be updated
 
         out_losses = []
@@ -236,11 +232,11 @@ def quantize_gptaq(model, dataloader, args, device):
 
         # Logging
         stats_payload["layer_time"] = time.time() - start_time
+        stats_payload["out_loss"] = torch.mean(torch.Tensor(out_losses)).item()
         stats_payload["Step"] = i
-
-        normal_outlier_count_global += normal_outlier_count
-        w_count_global += w_count
-
+        if args.wandb:
+            wandb.log({"out_loss": stats_payload["out_loss"]})
+            wandb.log({"layer_time": stats_payload["layer_time"]})
         print(stats_payload)
 
     print("=====================\nFinal stats:")
@@ -253,6 +249,7 @@ def quantize_gptaq(model, dataloader, args, device):
     model.config.use_cache = use_cache
     print(f"quantize: {torch.cuda.max_memory_allocated()=:,}")
     return quantizers
+
 
 @torch.no_grad()
 def perplexity_eval(model, testenc, args, dev):
@@ -482,9 +479,6 @@ if __name__ == "__main__":
     model = get_model(args.model_path, args.load, args.dtype).train(False)
 
     print("\n============ Quantizing model... ============")
-    if args.wbits < 16 and args.load:
-        print("\n Warning: You are quantizing quantized model!")
-
     quantize_model(model, args, device)
 
     print("\n============ Evaluating perplexity... ============")
@@ -501,7 +495,7 @@ if __name__ == "__main__":
             eval_mode=True,
         )
         args.dataset_name = dataset
-        perplexity_eval(model, testloader, args, device,wndb)
+        perplexity_eval(model, testloader, args, device)
 
     print(f"eval: {torch.cuda.max_memory_allocated()=:,}")
     if args.wandb:

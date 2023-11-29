@@ -5,7 +5,6 @@ import torch.nn as nn
 from tqdm import trange
 from transformers import AutoConfig, AutoModelForCausalLM
 
-
 MODEL_ERROR_MSG = "Unsupported model type {} - only 'llama', 'Yi', 'opt' and 'falcon' are supported"
 FALCON_TYPES = ("falcon", "refinedweb", "refinedwebmodel")
 LLAMA_LIKE = ("llama", "Yi")
@@ -37,9 +36,9 @@ def get_model(model_path, load_quantized=None, dtype="auto"):
         model = AutoModelForCausalLM.from_pretrained(
             pretrained_model_name_or_path=model_path,
             trust_remote_code=True,
-            torch_dtype=dtype, 
+            torch_dtype=dtype,
             low_cpu_mem_usage=True,
-            local_files_only=True
+            local_files_only=True,
         )
     # Please verify correcttess #TODO
     model.seqlen = 4096
