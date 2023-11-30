@@ -199,7 +199,10 @@ def quantize_gptaq(model, dataloader, args, device):
                 )
 
                 if save:
-                    print("saving is not implemented")
+                    quantized.name = sublayer_name
+                    full_path = save + "/" + str(i) + "/"
+                    os.makedirs(full_path, exist_ok=True)
+                    torch.save(quantized.state_dict(), full_path + sublayer_name)
 
                 gptaq_handlers[sublayer_name].layer.weight.data = _reconstruct_weight(
                     quantized.codes, quantized.codebooks
@@ -247,7 +250,16 @@ def quantize_gptaq(model, dataloader, args, device):
 
     print("=====================\nFinal stats:")
     if save:
-        print("Saving not implemented")
+        torch.save(vars(args), save + "/args.pt")
+        already_saved_weights = set()
+        for name, layer in nn.ModuleList(get_layers(model)).named_modules():
+            if isinstance(layer, (nn.Conv2d, nn.Linear)):
+                already_saved_weights.add(layer.weight)
+        not_quantized_weights = {
+            name: param for name, param in model.named_parameters() if param not in already_saved_weights
+        }
+        torch.save(not_quantized_weights, save + "/not_quantized_weights.pt")
+
 
     if args.wandb:
         wandb.log({"max_cuda_mem_quantize": round(torch.cuda.max_memory_allocated() / 1e9, 2)})

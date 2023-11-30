@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from tqdm import trange
 from transformers import AutoConfig, AutoModelForCausalLM
+from src.aq import _reconstruct_weight
 
 MODEL_ERROR_MSG = "Unsupported model type {} - only 'llama', 'Yi', 'opt' and 'falcon' are supported"
 FALCON_TYPES = ("falcon", "refinedweb", "refinedwebmodel")
@@ -32,14 +33,21 @@ def get_model(model_path, load_quantized=None, dtype="auto"):
         dtype = getattr(torch, dtype)
 
     with suspend_nn_inits():
-        print("Loading pretrained model ...")
-        model = AutoModelForCausalLM.from_pretrained(
-            pretrained_model_name_or_path=model_path,
-            trust_remote_code=True,
-            torch_dtype=dtype,
-            low_cpu_mem_usage=True,
-            local_files_only=True,
-        )
+        if load_quantized:
+            print("Initializing model with random weights...")
+            config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)  # consider trust_remote_code=True
+            model = AutoModelForCausalLM.from_config(config, trust_remote_code=True, torch_dtype=dtype).eval()
+            print("Loading quantized model ...")
+            model = load_quantized_model(model, load_quantized)
+        else:
+            print("Loading pretrained model ...")
+            model = AutoModelForCausalLM.from_pretrained(
+                pretrained_model_name_or_path=model_path,
+                trust_remote_code=True,
+                torch_dtype=dtype,
+                low_cpu_mem_usage=True,
+                local_files_only=True,
+            )
     # Please verify correcttess #TODO
     model.seqlen = 2048
 
@@ -137,3 +145,19 @@ def get_sequential_groups(model):
         ]
     else:
         raise ValueError(MODEL_ERROR_MSG.format(model.config.model_type))
+
+
+def read_quant_weight_from_file(load_path, block_i, layer_name):
+    return torch.load(load_path + "/" + str(block_i) + "/" + layer_name)
+
+def load_quantized_model(model, load_path):
+    layers = get_layers(model)
+    for i in trange(len(layers)):
+        layer = layers[i]
+        sub_layers = find_sublayers(layer)
+        for name in sub_layers:
+            quantized_params_dict = read_quant_weight_from_file(load_path, i, name)
+            sub_layers[name].weight = _reconstruct_weight(quantized_params_dict['codes'],quantized_params_dict['codebooks']).to(sub_layers[name].weight.data.dtype)
+        layers[i] = layer
+    model.load_state_dict(torch.load(load_path + "/not_quantized_weights.pt"), strict=False)
+    return model
