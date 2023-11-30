@@ -434,7 +434,7 @@ def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: in
         clusters = data[torch.randperm(data.shape[0])[:k], :]  # [k, dim]
     else:
         clusters = kmeans_greedy_init(data, k)
-    nearest_indices = torch.empty(len(data), k, dtype=torch.int64)
+    nearest_indices = torch.empty(len(data), dtype=torch.int64, device=data.device)
     block_size = block_size_vals // k
     for i in range(max_iter):
         for block_start in range(0, len(data), block_size):
