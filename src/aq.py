@@ -253,9 +253,6 @@ def _beam_search_squared_errors(
     delta_weight_without_part = reference_weight - beam_weights
     delta_weight_without_part[:, :, input_group_slice] += prev_weight_part
 
-    delta_weights = torch.sub(cand_weights[None, :, None, :, :],
-                              prev_weight_part.view(beam_size, 1, num_out_groups, out_group_size, in_group_size)
-                              ).reshape(beam_size, codebook_size, out_features, in_group_size)
     # dWTXTX is equivalent to < X @ (W - \sum BiCi except current codebook), X @ SOMETHING >
     dWTXTXg = delta_weight_without_part @ XTX[..., input_group_slice]  # [beam_size, out_features, in_group_size]
     # below: use torch.matmul to compute broadcasted batch matrix multiplication; see matmul docs
@@ -273,9 +270,13 @@ def _beam_search_squared_errors(
         (beam_size, k_best, num_out_groups), dtype=torch.int64, device=XTX.device,
     )
     for beam_id in range(beam_size):
+        delta_weights_i = torch.sub(cand_weights[:, None, :, :],
+                          prev_weight_part.view(beam_size, 1, num_out_groups, out_group_size, in_group_size)[beam_id]
+                          ).reshape(codebook_size, num_out_groups, out_group_size * in_group_size, 1)
+
         dot_products = torch.matmul(
             dWTXTXg.view(beam_size, 1, num_out_groups, 1, out_group_size * in_group_size)[beam_id],
-            delta_weights.view(beam_size, codebook_size, num_out_groups, out_group_size * in_group_size, 1)[beam_id],
+            delta_weights_i,
         ).reshape(codebook_size, num_out_groups)
 
         # step 2: compute
@@ -416,7 +417,7 @@ def kmeans_greedy_init(data: torch.Tensor, k: int) -> torch.Tensor:
 
 @maybe_script
 def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: int = 10,
-               rtol: float = 1e-06, atol: float = 1e-08, random_init: bool = False):
+               rtol: float = 1e-06, atol: float = 1e-08, random_init: bool = False, block_size_vals: int = 2 ** 30):
     """
     :param data: [nsamples, dim]
     :param k: number of centroids
@@ -426,18 +427,21 @@ def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: in
     :param atol: early stopping absolute tolerance for centroids
     :param random_init: if True, initialize with random points using pytorch global RNG
         if False (default), init by greedily selecting the point that is farthest from any cluster
+    :param block_size_vals: how many dot products to compute at a time
     :return: (clusters float[k, dim], data_indices int[nsamples], reconstructed_data: float[nsamples, dim])
     """
     if random_init:
         clusters = data[torch.randperm(data.shape[0])[:k], :]  # [k, dim]
     else:
         clusters = kmeans_greedy_init(data, k)
-
+    nearest_indices = torch.empty(len(data), dtype=torch.int64, device=data.device)
+    block_size = block_size_vals // k
     for i in range(max_iter):
-        nearest_indices = torch.addmm(
-            torch.bmm(clusters[:, None, :], clusters[:, :, None]).flatten(),
-            data, clusters.T, beta=-0.5
-        ).argmax(1)
+        for block_start in range(0, len(data), block_size):
+            nearest_indices[block_start: block_start + block_size] = torch.addmm(
+                torch.bmm(clusters[:, None, :], clusters[:, :, None]).flatten(),
+                data[block_start: block_start + block_size], clusters.T, beta=-0.5
+            ).argmax(1)
         # note: the above formula equals to - 0.5 || data[:, None, :] - clusters[None, :, :] || ^ 2 + const
 
         new_clusters = torch.zeros_like(clusters).index_reduce_(
@@ -447,10 +451,11 @@ def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: in
             if torch.allclose(new_clusters, clusters, rtol=rtol, atol=atol):
                 break
         clusters = new_clusters
-    nearest_indices = torch.addmm(
-        torch.bmm(clusters[:, None, :], clusters[:, :, None]).flatten(),
-        data, clusters.T, beta=-0.5
-    ).argmax(1)
+    for block_start in range(0, len(data), block_size):
+        nearest_indices[block_start: block_start + block_size] = torch.addmm(
+            torch.bmm(clusters[:, None, :], clusters[:, :, None]).flatten(),
+            data[block_start: block_start + block_size], clusters.T, beta=-0.5
+        ).argmax(1)
     reconstructed_data = clusters[nearest_indices]
     return clusters, nearest_indices, reconstructed_data
 
