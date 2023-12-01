@@ -244,8 +244,8 @@ def quantize_gptaq(model, dataloader, args, device):
         stats_payload["out_loss"] = torch.mean(torch.Tensor(out_losses)).item()
         stats_payload["Step"] = i
         if args.wandb:
-            wandb.log({"out_loss": stats_payload["out_loss"]})
-            wandb.log({"layer_time": stats_payload["layer_time"]})
+            wandb.log({"out_loss": stats_payload["out_loss"]},step = i)
+            wandb.log({"layer_time": stats_payload["layer_time"]},step = i)
         print(stats_payload)
 
     print("=====================\nFinal stats:")
