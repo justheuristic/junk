@@ -91,6 +91,7 @@ def get_leave_one_out_kmeans_1d(
 
 def fit_kmeans_1d(
         groupwise_data: torch.Tensor, k: int, max_iter: int = -1, offset_rate: float = 0, verbose: bool = False,
+        initial_clusters: Optional[torch.Tensor] = None,
         **kwargs
 ):
     """
@@ -120,9 +121,12 @@ def fit_kmeans_1d(
     sorted_cumsum = torch.cat([
         torch.zeros_like(sorted_data[:, :1]), sorted_data.cumsum(dim=1)], dim=1)
     # ^-- [num_groups, group_size + 1]; sorted by group_size + 1
-    offset = int((sorted_data.shape[1] - 1) * offset_rate)
-    init_indices = torch.linspace(offset, sorted_data.shape[1] - 1 - offset, k, dtype=torch.int64)
-    clusters = sorted_data[:, init_indices]  # shape: [num_groups, k]
+    if initial_clusters is not None:
+        clusters = initial_clusters
+    else:
+        offset = int((sorted_data.shape[1] - 1) * offset_rate)
+        init_indices = torch.linspace(offset, sorted_data.shape[1] - 1 - offset, k, dtype=torch.int64)
+        clusters = sorted_data[:, init_indices]  # shape: [num_groups, k]
 
     # step 3: run kmeans
     def _groupwise_find_border_indices(clusters, sorted_data):
