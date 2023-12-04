@@ -1,6 +1,6 @@
 import functools
 import os
-from typing import Tuple
+from typing import Tuple, Optional
 
 import torch
 import torch.nn as nn
@@ -10,19 +10,21 @@ from tqdm.auto import trange
 
 class QuantizedWeight(nn.Module):
     def __init__(self, *,
-                 weight_shape: Tuple[int, int],
+                 reference_weight: torch.Tensor,
                  in_group_size: int,
                  out_group_size: int,
                  num_codebooks: int,
                  nbits_per_codebook: int = 8,
-                 init_kmeans: bool = False,
-                 init_mean: float = 0.0,
-                 init_std: float = 1.0,
-                 device: torch.device = torch.device('cpu'),
+                 eps: float = 1e-9,
+                 device: Optional[torch.device] = None,
+                 fit_groupwise_statistics: bool,
+                 symmetric: bool,
                  **init_kwargs
                  ):
         super().__init__()
-        out_features, in_features = weight_shape
+        out_features, in_features = reference_weight.shape
+        if device is None:
+            device = reference_weight.device
         assert in_features % in_group_size == 0
         assert out_features % out_group_size == 0
 
@@ -30,27 +32,38 @@ class QuantizedWeight(nn.Module):
         self.num_codebooks = num_codebooks
         self.nbits_per_codebook = nbits_per_codebook
         self.codebook_size = codebook_size = 2 ** nbits_per_codebook
-        
-        if init_kmeans:
-            assert 'reference_weight' in init_kwargs, "please provide reference_weight"
-            codes, codebooks = init_aq_kmeans(
-                num_codebooks=num_codebooks, out_group_size=out_group_size, in_group_size=in_group_size,
-                codebook_size=self.codebook_size, **init_kwargs)
-        else:
-            #if init random be carefull with  init_mean=reference_weight.mean() / num_codebooks ** 0.5, init_std=reference_weight.std() / num_codebooks ** 0.5,
-            codebooks = torch.randn(
-                num_codebooks, codebook_size, out_group_size, in_group_size, device=device
-                ).mul_(init_std).add_(init_mean)
-            codes = torch.randint(low=0, high=codebook_size,
-                                  size=(out_features // out_group_size, in_features // in_group_size, num_codebooks),
-                                  device=device)
+
+        self.zeros = self.scales = None
+        weight_for_init = reference_weight
+
+        if fit_groupwise_statistics:
+            with torch.no_grad():
+                weight_groupwise = reference_weight.reshape(
+                    out_features // out_group_size, out_group_size, in_features // in_group_size, in_group_size
+                ).swapaxes(1, 2)  # [num_out_groups, num_in_groups, out_group_size, in_group_size]
+                if not symmetric:
+                    zeros = weight_groupwise.mean(dim=(-2, -1), keepdim=True)  # [num_out_groups, num_in_groups]
+                    self.zeros = nn.Parameter(zeros, requires_grad=True)
+                else:
+                    zeros = torch.zeros(*weight_groupwise.shape[:2], 1, 1, device=device, dtype=reference_weight.dtype)
+
+                scales = (weight_groupwise - zeros).norm(dim=(-2, -1), keepdim=True)  # [num_out_groups, num_in_groups]
+                self.scales = nn.Parameter(scales, requires_grad=True)
+                weight_groupwise = (weight_groupwise - zeros) / (scales + eps)
+                weight_for_init = weight_groupwise.swapaxes(1, 2).reshape_as(reference_weight)
+                del weight_groupwise
+
+        codes, codebooks = init_aq_kmeans(
+            weight_for_init, num_codebooks=num_codebooks,
+            out_group_size=out_group_size, in_group_size=in_group_size,
+            codebook_size=self.codebook_size, **init_kwargs)
 
         self.codebooks = nn.Parameter(codebooks, requires_grad=True)
         self.codes = nn.Parameter(codes, requires_grad=False)
 
     def forward(self, input):
         """Multiply :input: by the quantized weight matrix"""
-        return F.linear(input, _reconstruct_weight(self.codes, self.codebooks))
+        return F.linear(input, _reconstruct_weight(self.codes, self.codebooks, self.scales, self.zeros))
 
     @torch.no_grad()
     def requantize_(self, XTX: torch.Tensor, reference_weight: torch.Tensor, *,
@@ -67,17 +80,20 @@ class QuantizedWeight(nn.Module):
         """
         self.codes[...] = beam_search_optimal_codes(
             XTX=XTX, reference_weight=reference_weight, codebooks=self.codebooks, prev_codes=self.codes,
-            beam_size=beam_size, sparsity_regularizer=sparsity_regularizer, verbose=verbose
+            scales=self.scales, zeros=self.zeros, beam_size=beam_size, sparsity_regularizer=sparsity_regularizer,
+            verbose=verbose
         )
 
 
 @torch.inference_mode()
 def beam_search_optimal_codes(
+        *,
         XTX: torch.Tensor,
         reference_weight: torch.Tensor,
         codebooks: torch.Tensor,
         prev_codes: torch.IntTensor,
-        *,
+        scales: Optional[torch.Tensor],
+        zeros: Optional[torch.Tensor],
         beam_size: int,
         sparsity_regularizer: float = 0,
         verbose: bool,
@@ -88,6 +104,9 @@ def beam_search_optimal_codes(
     :param reference_weight: original weight matrix that is being quantized, shape: [out_features, in_features]
     :param codebooks: look-up tables of codes, shape: [num_codebooks, codebook_size, out_group_siz, in_group_size]
     :param prev_codes: previous-best integer weight codes, shape: [num_out_groups, num_in_groups, num_codebooks]
+    :param scales: weight will be multiplied by this factor, [num_out_groups, num_in_groups, 1, 1]
+    :param zeros: adds this to weight, shape [num_out_groups, num_in_groups, 1, 1]
+
     :param beam_size: consider up to this many best encoding combinations
     :param sparsity_regularizer: subtract this value from beam search objective each time you have a zero code somewhere
     :param verbose: if True, draw a progressbar and periodically print best loss
@@ -120,7 +139,7 @@ def beam_search_optimal_codes(
     in_features = num_in_groups * in_group_size
     out_features = num_out_groups * out_group_size
     assert reference_weight.shape == (out_features, in_features)
-    prev_weight = _reconstruct_weight(prev_codes, codebooks)
+    prev_weight = _reconstruct_weight(prev_codes, codebooks, scales, zeros)
 
     # initialize all beam codes as previous codes - so they can be updated during beam search
     beam_codes = prev_codes.unsqueeze(0)
@@ -141,16 +160,16 @@ def beam_search_optimal_codes(
             ### part 1: compute losses for every possible candidate for one given codebook and input group.
             # Currently, we compute errors for all output features in parallel in a vectorized fashion.
             best_squared_errors, best_indices = _beam_search_squared_errors(
-                XTX=XTX, reference_weight=reference_weight, codebooks=codebooks,
+                XTX=XTX, reference_weight=reference_weight, codebooks=codebooks, scales=scales,
                 beam_losses=beam_losses, beam_codes=beam_codes, beam_weights=beam_weights,
                 input_group_index=input_group_index, codebook_index=codebook_index,
-                k_best=beam_size,sparsity_regularizer=sparsity_regularizer
+                k_best=beam_size, sparsity_regularizer=sparsity_regularizer
             )  # [current beam_size, codebook_size, num_out_groups]
 
             # part 2: select beam_size new best codes and re-arrange beam to account for the fact that ...
             # ... sometimes two or more top candidates originate from the same source in previous beam
             beam_codes, beam_weights, beam_losses = _beam_search_select_best(
-                beam_codes, beam_weights, codebooks,
+                beam_codes, beam_weights, codebooks, scales, zeros,
                 input_group_index, codebook_index, best_squared_errors, best_indices,
                 beam_size
             )
@@ -184,11 +203,15 @@ def maybe_script(fn: callable) -> callable:
 
 
 @maybe_script
-def _reconstruct_weight(codes: torch.IntTensor, codebooks: torch.Tensor) -> torch.FloatTensor:
+def _reconstruct_weight(
+        codes: torch.IntTensor, codebooks: torch.Tensor,
+        scales: Optional[torch.Tensor] = None, zeros: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Decode float weights from quantization codes. Differentiable.
     :param codes: tensor of integer quantization codes, shape [*dims, num_out_groups, num_in_groups, num_codebooks]
     :param codebooks: tensor of vectors for each quantization code, [num_codebooks, codebook_size, out_group_size, in_group_size]
+    :param scales: weight will be multiplied by this factor, must be broadcastble with [*dims, out_groups, num_in_groups, out_group_size, in_group_size]
+    :param zeros: adds this to weight, must be broadcastble with [*dims, out_groups, num_in_groups, out_group_size, in_group_size]
     :return: reconstructed weight tensor of shape [*dims, num_in_groups*group_size]
     """
     num_out_groups, num_in_groups, num_codebooks = codes.shape[-3:]
@@ -207,14 +230,18 @@ def _reconstruct_weight(codes: torch.IntTensor, codebooks: torch.Tensor) -> torc
     reconstructed_weight_groupwise = reconstructed_weight_flat.view(
         list(codes.shape[:-3]) + [num_out_groups, num_in_groups, out_group_size, in_group_size]
     )
+    if scales is not None:
+        reconstructed_weight_groupwise = reconstructed_weight_groupwise.mul(scales)
+    if zeros is not None:
+        reconstructed_weight_groupwise = reconstructed_weight_groupwise.add(zeros)
     return reconstructed_weight_groupwise.swapaxes(-3, -2).reshape(list(codes.shape[:-3]) + [out_features, in_features])
 
 
 @maybe_script
 def _beam_search_squared_errors(
-        XTX: torch.Tensor, reference_weight: torch.Tensor, codebooks: torch.Tensor,
+        XTX: torch.Tensor, reference_weight: torch.Tensor, codebooks: torch.Tensor, scales: Optional[torch.Tensor],
         beam_losses: torch.Tensor, beam_codes: torch.Tensor, beam_weights: torch.Tensor,
-        input_group_index: int, codebook_index: int, k_best :int, sparsity_regularizer: float,
+        input_group_index: int, codebook_index: int, k_best: int, sparsity_regularizer: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Compute MSE or sum-of-squared-error losses for all possible ways to replace quantization codes for one input group
@@ -224,6 +251,8 @@ def _beam_search_squared_errors(
     :note: if both XTX *and* beam_loses are divided by dataset size, this function will return mean squared error
     :param reference_weight: original weight matrix that is being quantized, shape: [out_features, in_features]
     :param codebooks: look-up tables of codes, shape: [num_codebooks, codebook_size, out_group_size, in_group_size]
+    :param scales: weight will be multiplied by this factor, [num_out_groups, num_in_groups, 1, 1]
+
     :param beam_losses: sum-of-squared-error for each hypothesis in beam and for each output channel;
         shape: [beam_size, num_out_groups]
     :param beam_codes: a tensor with best weight codes, shape: [beam_size, num_out_groups, num_in_groups, num_codebooks]
@@ -242,26 +271,34 @@ def _beam_search_squared_errors(
 
     prev_codes_part = beam_codes[:, :, input_group_index, codebook_index]  # [beam_size, num_out_groups]
 
+    if scales is not None:
+        scales_part = scales[:, input_group_index, :, :]  # [num_out_groups, 1, 1]
+    else:
+        scales_part = torch.ones(num_out_groups, 1, 1, device=XTX.device, dtype=XTX.dtype)
+    scales_part_sq = torch.square(scales_part)
     prev_weight_part = F.embedding(
         prev_codes_part, codebooks[codebook_index].flatten(-2, -1)
     ).view(beam_size, out_features, in_group_size)  # previous codes de-quantized
+
+    scaled_prev_weight_part = prev_weight_part.view(beam_size, num_out_groups, out_group_size, in_group_size
+           ).mul(scales_part).view(beam_size, out_features, in_group_size)
 
     cand_weights = codebooks[codebook_index]  # [codebook_size, out_group_size, in_group_size], all replacement codes
 
     # Step 1: compute flat dot products between X @ (W_original - W_quantized_without_replaced_codes) and
     # ... and (X @ Ci) where Ci are all possible replacement codes
     delta_weight_without_part = reference_weight - beam_weights
-    delta_weight_without_part[:, :, input_group_slice] += prev_weight_part
+    delta_weight_without_part[:, :, input_group_slice] += scaled_prev_weight_part
 
     # dWTXTX is equivalent to < X @ (W - \sum BiCi except current codebook), X @ SOMETHING >
     dWTXTXg = delta_weight_without_part @ XTX[..., input_group_slice]  # [beam_size, out_features, in_group_size]
     # below: use torch.matmul to compute broadcasted batch matrix multiplication; see matmul docs
-    
-    XnewBkC_norms_sq = torch.bmm(
+
+    scaled_XnewBkC_norms_sq = torch.bmm(
         (cand_weights.flatten(0, 1) @ XTX[input_group_slice, input_group_slice]).view(
             codebook_size, 1, out_group_size * in_group_size),
         cand_weights.view(codebook_size, out_group_size * in_group_size, 1)
-    ).reshape(codebook_size, 1)
+    ).reshape(codebook_size, 1) * scales_part_sq.reshape(1, num_out_groups)  # [codebook_size, num_out_groups]
 
     best_squared_errors = torch.empty(
         (beam_size, k_best, num_out_groups), dtype=XTX.dtype, device=XTX.device
@@ -270,31 +307,33 @@ def _beam_search_squared_errors(
         (beam_size, k_best, num_out_groups), dtype=torch.int64, device=XTX.device,
     )
     for beam_id in range(beam_size):
-        delta_weights_i = torch.sub(cand_weights[:, None, :, :],
-                          prev_weight_part.view(beam_size, 1, num_out_groups, out_group_size, in_group_size)[beam_id]
-                          ).reshape(codebook_size, num_out_groups, out_group_size * in_group_size, 1)
+        scaled_delta_weights_i = torch.sub(
+            cand_weights[:, None, :, :],
+            prev_weight_part.view(beam_size, 1, num_out_groups, out_group_size, in_group_size)[beam_id]
+        ).mul(scales_part)  # [1, num_out_groups, out_group_size, in_group_size]
 
-        dot_products = torch.matmul(
+        scaled_dot_products = torch.matmul(
             dWTXTXg.view(beam_size, 1, num_out_groups, 1, out_group_size * in_group_size)[beam_id],
-            delta_weights_i,
+            scaled_delta_weights_i.view(codebook_size, num_out_groups, out_group_size * in_group_size, 1),
         ).reshape(codebook_size, num_out_groups)
 
         # step 2: compute
-        XoldBkC_norms_sq = torch.bmm(
-            (prev_weight_part[beam_id] @ XTX[input_group_slice, input_group_slice]).view(
+        scaled_XoldBkC_norms_sq = torch.bmm(
+            (scaled_prev_weight_part[beam_id] @ XTX[input_group_slice, input_group_slice]).view(
                 num_out_groups, 1, out_group_size * in_group_size),
-            prev_weight_part[beam_id].view(num_out_groups, out_group_size * in_group_size, 1)
+            scaled_prev_weight_part[beam_id].view(num_out_groups, out_group_size * in_group_size, 1)
         ).reshape(1, num_out_groups)
 
         candidate_squared_errors = (
-                beam_losses[beam_id, None, :] - 2 * dot_products + XnewBkC_norms_sq - XoldBkC_norms_sq
+                beam_losses[beam_id, None, :] - 2 * scaled_dot_products + scaled_XnewBkC_norms_sq - scaled_XoldBkC_norms_sq
         )  # shape: [codebook_size, num_out_groups]
 
         if sparsity_regularizer != 0:
             candidate_squared_errors += sparsity_regularizer * (prev_codes_part[beam_id] == 0).to(XTX.dtype)[None, :]
             candidate_squared_errors[0, :] -= sparsity_regularizer
-            
-        best_beam_squared_errors, best_beam_indices = torch.topk(candidate_squared_errors, k_best, dim=0, largest=False, sorted=False)
+
+        best_beam_squared_errors, best_beam_indices = torch.topk(candidate_squared_errors, k_best, dim=0, largest=False,
+                                                                 sorted=False)
         best_squared_errors[beam_id] = best_beam_squared_errors
         best_indices[beam_id] = best_beam_indices
 
@@ -304,6 +343,7 @@ def _beam_search_squared_errors(
 @maybe_script
 def _beam_search_select_best(
         beam_codes: torch.Tensor, beam_weights: torch.Tensor, codebooks: torch.Tensor,
+        scales: Optional[torch.Tensor], zeros: Optional[torch.Tensor],
         input_group_index: int, codebook_index: int, best_losses: torch.Tensor,
         best_indices: torch.Tensor, beam_size: int,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -312,10 +352,13 @@ def _beam_search_select_best(
     :param beam_codes: a tensor with best weight codes, shape: [beam_size, num_out_groups, num_in_groups, num_codebooks]
     :param beam_weights: a tensor with de-quantized beam_codes, shape: [beam_size, out_features, in_features]
     :param codebooks: a tensor with look-up tables of codes, shape: [num_codebooks, codebook_size, out_group_size, in_group_size]
+    :param scales: weight will be multiplied by this factor, [num_out_groups, num_in_groups, 1, 1]
+    :param zeros: adds this to weight, shape [num_out_groups, num_in_groups, 1, 1]
+
     :param input_group_index: an index of one group of in_features that is being re-encoded
     :param codebook_index: an index of one codebook for that group of features that is being re-encoded
     :param best_losses: a 3d tensor of losses of k_best lowest square errors for each beam and out group,
-        shape = [beam_size, k_best, num_out_groups] 
+        shape = [beam_size, k_best, num_out_groups]
     :param best_indices: a 3d tensor of indices of k_best lowest square errors for each beam and out group,
         shape = [beam_size, k_best, num_out_groups]
     :param beam_size: how many top hypotheses should be selected
@@ -329,12 +372,14 @@ def _beam_search_select_best(
     _prev_beam_size, num_out_groups, num_in_groups, num_codebooks = beam_codes.shape
     flat_best = best_losses.flatten(0, 1).topk(dim=0, k=beam_size, largest=False)
     best_hypo_source_ids = flat_best.indices // k_best
-    best_hypo_codes = best_indices.flatten(0, 1)[flat_best.indices,torch.arange(num_out_groups)].reshape(beam_size, out_features)
+    best_hypo_codes = best_indices.flatten(0, 1)[flat_best.indices, torch.arange(num_out_groups)].reshape(beam_size,
+                                                                                                          out_features)
     # ^-- shape: [beam_size, out_features]
 
     # reorder beam codes and weights
     new_beam_codes = torch.full(
-        size=(len(best_hypo_codes), num_out_groups, num_in_groups, num_codebooks), fill_value=-1, dtype=beam_codes.dtype,
+        size=(len(best_hypo_codes), num_out_groups, num_in_groups, num_codebooks), fill_value=-1,
+        dtype=beam_codes.dtype,
         device=device
     )  # [beam_size, num_out_groups, num_in_groups, num_codebooks]
     new_beam_weights = torch.empty(len(best_hypo_codes), out_features, in_features, dtype=dtype, device=device)
@@ -345,7 +390,7 @@ def _beam_search_select_best(
             beam_codes[best_hypo_source_ids[beam_index, :], arange_out_groups, ...]
         new_beam_codes[beam_index, :, input_group_index, codebook_index] = \
             best_hypo_codes[beam_index, :]
-        new_beam_weights[beam_index, :, :] = _reconstruct_weight(new_beam_codes[beam_index, ...], codebooks)
+        new_beam_weights[beam_index, :, :] = _reconstruct_weight(new_beam_codes[beam_index, ...], codebooks, scales, zeros)
 
     # Note: the code above can be further accelerated by 1) vectorzing loop and ...
     # ... 2) updating new_beam_weights only for the chosen input group
@@ -370,12 +415,11 @@ def _channelwise_squared_error(XTX: torch.Tensor, weight: torch.Tensor, referenc
 
 @torch.no_grad()
 def init_aq_kmeans(reference_weight: torch.Tensor, *,
-                   num_codebooks: int, out_group_size: int, in_group_size: int, codebook_size: int, alpha: float = 1.0,
+                   num_codebooks: int, out_group_size: int, in_group_size: int, codebook_size: int,
                    verbose: bool = False, **kwargs):
     """
     Create initial codes and codebooks using residual K-means clustering of weights
-    :params reference_weight, num_codebooks, out_group_size, in_group_size, nbits, verbose: same as in QuantizedWeght
-    :param alpha: shrinkage for residual quantization, typically in (0, 1] semi-interval
+    :params reference_weight, num_codebooks, out_group_size, in_group_size, nbits, verbose: same as in QuantizedWeight
     :param kwargs: any additional params are forwarded to fit_kmeans
     """
     out_features, in_features = reference_weight.shape
@@ -390,8 +434,8 @@ def init_aq_kmeans(reference_weight: torch.Tensor, *,
     for _ in trange(num_codebooks, desc='initializing with kmeans') if verbose else range(num_codebooks):
         codebook_i, codes_i, reconstructed_weight_i = fit_kmeans(weight_residue, k=codebook_size, **kwargs)
         codes_i = codes_i.reshape(num_out_groups, num_in_groups, 1)
-        codebook_i = alpha * codebook_i.reshape(1, codebook_size, out_group_size, in_group_size)
-        weight_residue -= reconstructed_weight_i * alpha
+        codebook_i = codebook_i.reshape(1, codebook_size, out_group_size, in_group_size)
+        weight_residue -= reconstructed_weight_i
         codes.append(codes_i)
         codebooks.append(codebook_i)
         del reconstructed_weight_i
@@ -401,7 +445,7 @@ def init_aq_kmeans(reference_weight: torch.Tensor, *,
 
 
 @maybe_script
-def kmeans_greedy_init(data: torch.Tensor, k: int) -> torch.Tensor:
+def _kmeans_greedy_init(data: torch.Tensor, k: int) -> torch.Tensor:
     """Get initial clusters by iteratively choosing a vector that is the farthest from already selected clusters"""
     clusters = torch.zeros(k, data.shape[1], device=data.device)
     running_min_distances = torch.full((data.shape[0],), torch.inf, device=data.device, dtype=data.dtype)
@@ -417,7 +461,7 @@ def kmeans_greedy_init(data: torch.Tensor, k: int) -> torch.Tensor:
 
 @maybe_script
 def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: int = 10,
-               rtol: float = 1e-06, atol: float = 1e-08, random_init: bool = False, block_size_vals: int = 2 ** 30):
+               rtol: float = 1e-06, atol: float = 1e-08, greedy_init: bool = False, block_size_vals: int = 2 ** 30):
     """
     :param data: [nsamples, dim]
     :param k: number of centroids
@@ -425,15 +469,16 @@ def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: in
     :param check_every: check for convergence (allclose(new_centroids, old_centroids)) once in this many steps
     :param rtol: early stopping relative tolerance for centroids
     :param atol: early stopping absolute tolerance for centroids
-    :param random_init: if True, initialize with random points using pytorch global RNG
-        if False (default), init by greedily selecting the point that is farthest from any cluster
+    :param greedy_init: if True, init by greedily selecting the point that is farthest from any cluster
+        if False (default), initialize with random points using pytorch global RNG
     :param block_size_vals: how many dot products to compute at a time
     :return: (clusters float[k, dim], data_indices int[nsamples], reconstructed_data: float[nsamples, dim])
     """
-    if random_init:
-        clusters = data[torch.randperm(data.shape[0])[:k], :]  # [k, dim]
+    if greedy_init:
+        clusters = _kmeans_greedy_init(data, k)
     else:
-        clusters = kmeans_greedy_init(data, k)
+        clusters = data[torch.randperm(data.shape[0])[:k], :]  # [k, dim]
+
     nearest_indices = torch.empty(len(data), dtype=torch.int64, device=data.device)
     block_size = block_size_vals // k
     for i in range(max_iter):
@@ -464,5 +509,5 @@ def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: in
 def find_nearest_cluster(data, clusters):
     """Find nearest clusters and return their indices"""
     return torch.addmm(
-        torch.bmm(clusters[:, None, :], clusters[:, :, None]).flatten(),  data, clusters.T, beta=-0.5
+        torch.bmm(clusters[:, None, :], clusters[:, :, None]).flatten(), data, clusters.T, beta=-0.5
     ).argmax(1)

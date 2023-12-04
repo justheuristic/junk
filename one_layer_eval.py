@@ -39,15 +39,13 @@ def compress_aq(args, reference_weigh,run):
     Compress W with AQ
     '''
     quantized_layer = QuantizedWeight(
-        weight_shape=reference_weight.shape,
+        reference_weight,
         num_codebooks=args.num_codebooks,
         nbits_per_codebook=args.nbits_per_codebook,
         out_group_size=args.out_group_size,
         in_group_size=args.in_group_size,
         device=device,
-        init_kmeans=args.kmeans_init,
         reference_weight=reference_weight,
-        alpha=args.alpha,
         verbose=True,
     )
 
@@ -212,22 +210,10 @@ if __name__ == "__main__":
         help="Sparsity regularizer.",
     )
     parser.add_argument(
-        "--alpha",
-        type=float,
-        default=1.0,
-        help="Weight for kmeans initialization.",
-    )
-    parser.add_argument(
         "--grouped_quant",
         action="store_true",
         help="Quantize grouped qkv",
     )
-    parser.add_argument(
-        "--kmeans_init",
-        action="store_false",
-        help="Init with Kmeans",
-    )
-    
     parser.add_argument(
         "--print_frequency",
         type=int,
