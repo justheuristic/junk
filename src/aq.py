@@ -365,7 +365,7 @@ def _beam_search_squared_errors(
         delta_weights_i = torch.sub(
             cand_weights[:, None, :, :],  # note: if scale exists, we scale **after** subtracting (next statement)
             prev_part_dequantized.view(beam_size, 1, num_out_groups, out_group_size, in_group_size)[beam_id]
-        )  # [1, num_out_groups, out_group_size, in_group_size]
+        )  # [codebook_size, num_out_groups, out_group_size, in_group_size]
         if scales is not None:
             delta_weights_i = delta_weights_i.mul(scales_part)
 
