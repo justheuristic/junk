@@ -187,7 +187,7 @@ def beam_search_optimal_codes(
         progressbar = trange(num_in_groups * num_codebooks)
 
     def _make_range(n: int) -> list:
-        seq = range(n)
+        seq = list(range(n))
         if dim_rng is not None:
             dim_rng.shuffle(seq)
         return seq
