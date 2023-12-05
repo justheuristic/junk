@@ -1,5 +1,6 @@
 import functools
 import os
+import random
 from typing import Tuple, Optional
 
 import torch
@@ -92,8 +93,7 @@ class QuantizedWeight(nn.Module):
         return zeros
 
     @torch.no_grad()
-    def requantize_(self, XTX: torch.Tensor, reference_weight: torch.Tensor, *,
-                    beam_size: int, sparsity_regularizer: float, verbose: bool):
+    def requantize_(self, XTX: torch.Tensor, reference_weight: torch.Tensor, *, beam_size: int, **kwargs):
         """
         Update self.codes in-place via beam search so as to minimize squared errors
         :param XTX: pairwise products of input features matmul(X.transpose(), X), shape: [in_features, in_features]
@@ -110,8 +110,7 @@ class QuantizedWeight(nn.Module):
 
         self.codes[...] = beam_search_optimal_codes(
             XTX=XTX, reference_weight=reference_weight, codebooks=self.codebooks, prev_codes=self.codes,
-            scales=quantized_scales, zeros=quantized_zeros, beam_size=beam_size,
-            sparsity_regularizer=sparsity_regularizer, verbose=verbose
+            scales=quantized_scales, zeros=quantized_zeros, beam_size=beam_size, **kwargs
         )
 
 
@@ -125,6 +124,7 @@ def beam_search_optimal_codes(
         scales: Optional[torch.Tensor],
         zeros: Optional[torch.Tensor],
         beam_size: int,
+        dim_rng: Optional[random.Random] = None,
         sparsity_regularizer: float = 0,
         verbose: bool,
 ):
@@ -185,8 +185,15 @@ def beam_search_optimal_codes(
 
     if verbose:
         progressbar = trange(num_in_groups * num_codebooks)
-    for input_group_index in range(num_in_groups):
-        for codebook_index in range(num_codebooks):
+
+    def _make_range(n: int) -> list:
+        seq = range(n)
+        if dim_rng is not None:
+            dim_rng.shuffle(seq)
+        return seq
+
+    for input_group_index in _make_range(num_in_groups):
+        for codebook_index in _make_range(num_codebooks):
             ### part 1: compute losses for every possible candidate for one given codebook and input group.
             # Currently, we compute errors for all output features in parallel in a vectorized fashion.
             best_squared_errors, best_indices = _beam_search_squared_errors(
