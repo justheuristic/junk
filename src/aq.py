@@ -11,13 +11,13 @@ from tqdm.auto import trange
 
 
 class QuantizedWeight(nn.Module):
+    EPS = 1e-9
     def __init__(self, *,
                  reference_weight: torch.Tensor,
                  in_group_size: int,
                  out_group_size: int,
                  num_codebooks: int,
                  nbits_per_codebook: int = 8,
-                 eps: float = 1e-9,
                  device: Optional[torch.device] = None,
                  scales_nbits: int = 0,
                  zeros_nbits: int = 0,
@@ -54,7 +54,7 @@ class QuantizedWeight(nn.Module):
                                         device=device, dtype=reference_weight.dtype)
                 if scales_nbits > 0:
                     scales = (weight_groupwise - zeros).norm(
-                        dim=(-2, -1), keepdim=True) + eps  # [num_out_groups, num_in_groups]
+                        dim=(-2, -1), keepdim=True) + self.EPS  # [num_out_groups, num_in_groups, 1, 1]
                     self.scales = nn.Parameter(scales, requires_grad=True)
                 else:
                     scales = torch.ones(*weight_groupwise.shape[:2], 1, 1,
