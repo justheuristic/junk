@@ -5,6 +5,7 @@ from typing import Tuple, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from src.kmeans_1d import fit_kmeans_1d
 from tqdm.auto import trange
 
 
@@ -17,8 +18,8 @@ class QuantizedWeight(nn.Module):
                  nbits_per_codebook: int = 8,
                  eps: float = 1e-9,
                  device: Optional[torch.device] = None,
-                 fit_groupwise_statistics: bool,
-                 symmetric: bool,
+                 scales_nbits: int = 0,
+                 zeros_nbits: int = 0,
                  **init_kwargs
                  ):
         super().__init__()
@@ -34,22 +35,31 @@ class QuantizedWeight(nn.Module):
         self.codebook_size = codebook_size = 2 ** nbits_per_codebook
 
         self.zeros = self.scales = None
+        self.scales_nbits = scales_nbits
+        self.zeros_nbits = zeros_nbits
         weight_for_init = reference_weight
 
-        if fit_groupwise_statistics:
+        if scales_nbits > 0 or zeros_nbits > 0:
             with torch.no_grad():
                 weight_groupwise = reference_weight.reshape(
-                    out_features // out_group_size, out_group_size, in_features // in_group_size, in_group_size
+                    out_features // out_group_size, out_group_size,
+                    in_features // in_group_size, in_group_size
                 ).swapaxes(1, 2)  # [num_out_groups, num_in_groups, out_group_size, in_group_size]
-                if not symmetric:
+                if zeros_nbits > 0:
                     zeros = weight_groupwise.mean(dim=(-2, -1), keepdim=True)  # [num_out_groups, num_in_groups]
                     self.zeros = nn.Parameter(zeros, requires_grad=True)
                 else:
-                    zeros = torch.zeros(*weight_groupwise.shape[:2], 1, 1, device=device, dtype=reference_weight.dtype)
+                    zeros = torch.zeros(*weight_groupwise.shape[:2], 1, 1,
+                                        device=device, dtype=reference_weight.dtype)
+                if scales_nbits > 0:
+                    scales = (weight_groupwise - zeros).norm(
+                        dim=(-2, -1), keepdim=True) + eps  # [num_out_groups, num_in_groups]
+                    self.scales = nn.Parameter(scales, requires_grad=True)
+                else:
+                    scales = torch.ones(*weight_groupwise.shape[:2], 1, 1,
+                                        device=device, dtype=reference_weight.dtype)
 
-                scales = (weight_groupwise - zeros).norm(dim=(-2, -1), keepdim=True)  # [num_out_groups, num_in_groups]
-                self.scales = nn.Parameter(scales, requires_grad=True)
-                weight_groupwise = (weight_groupwise - zeros) / (scales + eps)
+                weight_groupwise = (weight_groupwise - zeros) / scales
                 weight_for_init = weight_groupwise.swapaxes(1, 2).reshape_as(reference_weight)
                 del weight_groupwise
 
@@ -63,7 +73,23 @@ class QuantizedWeight(nn.Module):
 
     def forward(self, input):
         """Multiply :input: by the quantized weight matrix"""
-        return F.linear(input, _reconstruct_weight(self.codes, self.codebooks, self.scales, self.zeros))
+        raise NotImplementedError()
+
+    def get_scales(self):
+        if self.scales is None:
+            return None
+        scales = self.scales
+        if self.scales_nbits < 16:
+            scales = straight_through_quantize(scales, nbits=self.scales_nbits)
+        return scales
+
+    def get_zeros(self):
+        if self.zeros is None:
+            return None
+        zeros = self.zeros
+        if self.zeros_nbits < 16:
+            zeros = straight_through_quantize(zeros, nbits=self.zeros_nbits)
+        return zeros
 
     @torch.no_grad()
     def requantize_(self, XTX: torch.Tensor, reference_weight: torch.Tensor, *,
@@ -78,10 +104,14 @@ class QuantizedWeight(nn.Module):
         :param verbose: if True, draw a progressbar and periodically print best loss
 
         """
+        with torch.no_grad():
+            quantized_scales = self.get_scales()
+            quantized_zeros = self.get_zeros()
+
         self.codes[...] = beam_search_optimal_codes(
             XTX=XTX, reference_weight=reference_weight, codebooks=self.codebooks, prev_codes=self.codes,
-            scales=self.scales, zeros=self.zeros, beam_size=beam_size, sparsity_regularizer=sparsity_regularizer,
-            verbose=verbose
+            scales=quantized_scales, zeros=quantized_zeros, beam_size=beam_size,
+            sparsity_regularizer=sparsity_regularizer, verbose=verbose
         )
 
 
@@ -202,6 +232,20 @@ def maybe_script(fn: callable) -> callable:
     return torch.jit.script(fn) if should_script else fn
 
 
+def straight_through_quantize(
+        values: torch.Tensor, nbits: int, max_iter: int = 100, clusters: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    with torch.no_grad():
+        clusters, indices, quantized_values = fit_kmeans_1d(
+            values.flatten(1, -1), k=2 ** nbits, max_iter=max_iter, initial_clusters=clusters)
+        quantized_values = quantized_values.reshape_as(values)
+
+    if values.requires_grad:
+        quantized_values = quantized_values + (values - values.detach())
+
+    return quantized_values
+
+
 @maybe_script
 def _reconstruct_weight(
         codes: torch.IntTensor, codebooks: torch.Tensor,
@@ -274,31 +318,34 @@ def _beam_search_squared_errors(
     if scales is not None:
         scales_part = scales[:, input_group_index, :, :]  # [num_out_groups, 1, 1]
     else:
-        scales_part = torch.ones(num_out_groups, 1, 1, device=XTX.device, dtype=XTX.dtype)
-    scales_part_sq = torch.square(scales_part)
-    prev_weight_part = F.embedding(
+        scales_part = torch.empty(0, device=XTX.device)
+    prev_part_dequantized = F.embedding(
         prev_codes_part, codebooks[codebook_index].flatten(-2, -1)
     ).view(beam_size, out_features, in_group_size)  # previous codes de-quantized
 
-    scaled_prev_weight_part = prev_weight_part.view(beam_size, num_out_groups, out_group_size, in_group_size
-           ).mul(scales_part).view(beam_size, out_features, in_group_size)
+    prev_weight_part = prev_part_dequantized
+    if scales is not None:
+        prev_weight_part = prev_weight_part.view(beam_size, num_out_groups, out_group_size, in_group_size
+                                                 ).mul(scales_part).view(beam_size, out_features, in_group_size)
 
     cand_weights = codebooks[codebook_index]  # [codebook_size, out_group_size, in_group_size], all replacement codes
 
     # Step 1: compute flat dot products between X @ (W_original - W_quantized_without_replaced_codes) and
     # ... and (X @ Ci) where Ci are all possible replacement codes
     delta_weight_without_part = reference_weight - beam_weights
-    delta_weight_without_part[:, :, input_group_slice] += scaled_prev_weight_part
+    delta_weight_without_part[:, :, input_group_slice] += prev_weight_part
 
     # dWTXTX is equivalent to < X @ (W - \sum BiCi except current codebook), X @ SOMETHING >
     dWTXTXg = delta_weight_without_part @ XTX[..., input_group_slice]  # [beam_size, out_features, in_group_size]
     # below: use torch.matmul to compute broadcasted batch matrix multiplication; see matmul docs
 
-    scaled_XnewBkC_norms_sq = torch.bmm(
+    XnewBkC_norms_sq = torch.bmm(
         (cand_weights.flatten(0, 1) @ XTX[input_group_slice, input_group_slice]).view(
             codebook_size, 1, out_group_size * in_group_size),
         cand_weights.view(codebook_size, out_group_size * in_group_size, 1)
-    ).reshape(codebook_size, 1) * scales_part_sq.reshape(1, num_out_groups)  # [codebook_size, num_out_groups]
+    ).reshape(codebook_size, 1)  # [codebook_size, num_out_groups]
+    if scales is not None:
+        XnewBkC_norms_sq = XnewBkC_norms_sq.mul(scales_part.square().reshape(1, num_out_groups))
 
     best_squared_errors = torch.empty(
         (beam_size, k_best, num_out_groups), dtype=XTX.dtype, device=XTX.device
@@ -307,25 +354,29 @@ def _beam_search_squared_errors(
         (beam_size, k_best, num_out_groups), dtype=torch.int64, device=XTX.device,
     )
     for beam_id in range(beam_size):
-        scaled_delta_weights_i = torch.sub(
-            cand_weights[:, None, :, :],
-            prev_weight_part.view(beam_size, 1, num_out_groups, out_group_size, in_group_size)[beam_id]
-        ).mul(scales_part)  # [1, num_out_groups, out_group_size, in_group_size]
+        # step 2: compute pairwise dot products for mse
+        delta_weights_i = torch.sub(
+            cand_weights[:, None, :, :],  # note: if scale exists, we scale **after** subtracting (next statement)
+            prev_part_dequantized.view(beam_size, 1, num_out_groups, out_group_size, in_group_size)[beam_id]
+        )  # [1, num_out_groups, out_group_size, in_group_size]
+        if scales is not None:
+            delta_weights_i = delta_weights_i.mul(scales_part)
 
-        scaled_dot_products = torch.matmul(
+        dot_products = torch.matmul(
             dWTXTXg.view(beam_size, 1, num_out_groups, 1, out_group_size * in_group_size)[beam_id],
-            scaled_delta_weights_i.view(codebook_size, num_out_groups, out_group_size * in_group_size, 1),
+            delta_weights_i.view(codebook_size, num_out_groups, out_group_size * in_group_size, 1),
         ).reshape(codebook_size, num_out_groups)
 
-        # step 2: compute
-        scaled_XoldBkC_norms_sq = torch.bmm(
-            (scaled_prev_weight_part[beam_id] @ XTX[input_group_slice, input_group_slice]).view(
+        # step 3: compute squared old code norms
+        XoldBkC_norms_sq = torch.bmm(
+            (prev_weight_part[beam_id] @ XTX[input_group_slice, input_group_slice]).view(
                 num_out_groups, 1, out_group_size * in_group_size),
-            scaled_prev_weight_part[beam_id].view(num_out_groups, out_group_size * in_group_size, 1)
+            prev_weight_part[beam_id].view(num_out_groups, out_group_size * in_group_size, 1)
         ).reshape(1, num_out_groups)
 
+        # finally, combine them to get MSE
         candidate_squared_errors = (
-                beam_losses[beam_id, None, :] - 2 * scaled_dot_products + scaled_XnewBkC_norms_sq - scaled_XoldBkC_norms_sq
+                beam_losses[beam_id, None, :] - 2 * dot_products + XnewBkC_norms_sq - XoldBkC_norms_sq
         )  # shape: [codebook_size, num_out_groups]
 
         if sparsity_regularizer != 0:
@@ -390,7 +441,8 @@ def _beam_search_select_best(
             beam_codes[best_hypo_source_ids[beam_index, :], arange_out_groups, ...]
         new_beam_codes[beam_index, :, input_group_index, codebook_index] = \
             best_hypo_codes[beam_index, :]
-        new_beam_weights[beam_index, :, :] = _reconstruct_weight(new_beam_codes[beam_index, ...], codebooks, scales, zeros)
+        new_beam_weights[beam_index, :, :] = _reconstruct_weight(new_beam_codes[beam_index, ...], codebooks, scales,
+                                                                 zeros)
 
     # Note: the code above can be further accelerated by 1) vectorzing loop and ...
     # ... 2) updating new_beam_weights only for the chosen input group
