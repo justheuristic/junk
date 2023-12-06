@@ -40,28 +40,29 @@ class QuantizedWeight(nn.Module):
         self.scale_nbits = scale_nbits
         weight_for_init = reference_weight
 
-        if scale_nbits > 0:
-            with torch.no_grad():
-                weight_groupwise = reference_weight.reshape(
-                    out_features // out_group_size, out_group_size,
-                    in_features // in_group_size, in_group_size
-                ).swapaxes(1, 2)  # [num_out_groups, num_in_groups, out_group_size, in_group_size]
-                scales = weight_groupwise.norm(
-                    dim=(-2, -1), keepdim=True) + self.EPS  # [num_out_groups, num_in_groups, 1, 1]
-                self.scales_are_lossless = scale_nbits >= 16 or (2 ** scale_nbits >= scales.shape[1])
+        with torch.no_grad():
+            weight_groupwise = reference_weight.reshape(
+                out_features // out_group_size, out_group_size,
+                in_features // in_group_size, in_group_size
+            ).swapaxes(1, 2)  # [num_out_groups, num_in_groups, out_group_size, in_group_size]
 
-                if self.scales_are_lossless or self.straight_through_gradient:
-                    # ^-- this checks if scales can be preserved losslessly
-                    self.scales = nn.Parameter(scales, requires_grad=True)
-                else:
-                    scales_clusters, scales_indices, _ = fit_kmeans_1d(
-                        scales.flatten(1, -1), k=2 ** scale_nbits
-                    )
-                    self.scales_clusters = nn.Parameter(scales_clusters, requires_grad=True)
-                    self.scales_indices = nn.Parameter(scales_indices, requires_grad=False)
+            if scale_nbits > 0:
+                scales = weight_groupwise.norm(dim=(2, 3), keepdim=True) + self.EPS
+            else:
+                scales = weight_groupwise.flatten(1, -1).norm(dim=-1).view(-1, 1, 1, 1) + self.EPS
+            # shape [num_out_groups, num_in_groups, 1, 1] if scale_nbits > 0 else [num_out_groups, num_in_groups, 1, 1]
 
-                weight_for_init = (weight_groupwise / scales).swapaxes(1, 2).reshape_as(reference_weight)
-                del weight_groupwise
+            self.scales_are_lossless = scale_nbits == 0 or scale_nbits >= 16 or (2 ** scale_nbits >= scales.shape[1])
+            if self.scales_are_lossless or self.straight_through_gradient:
+                # ^-- this checks if scales can be preserved losslessly
+                self.scales = nn.Parameter(scales, requires_grad=True)
+            else:
+                scales_clusters, scales_indices, _ = fit_kmeans_1d(scales.flatten(1, -1), k=2 ** scale_nbits)
+                self.scales_clusters = nn.Parameter(scales_clusters, requires_grad=True)
+                self.scales_indices = nn.Parameter(scales_indices, requires_grad=False)
+
+            weight_for_init = (weight_groupwise / scales).swapaxes(1, 2).reshape_as(reference_weight)
+            del weight_groupwise
 
         codes, codebooks = init_aq_kmeans(
             weight_for_init, num_codebooks=num_codebooks,
@@ -71,11 +72,12 @@ class QuantizedWeight(nn.Module):
         self.codebooks = nn.Parameter(codebooks, requires_grad=True)
         self.codes = nn.Parameter(codes, requires_grad=False)
 
+    def forward(self):
+        return _reconstruct_weight(self.codes, self.codebooks, self.get_scales())
+
     def get_scales(self):
-        if self.scale_nbits == 0:
-            return None
-        elif self.scales_are_lossless:
-            return self.scales  # scales are not quantized or the quantization is lossles
+        if self.scale_nbits == 0 or self.scales_are_lossless:
+            return self.scales  # scales are not quantized or the quantization is lossless
         elif self.straight_through_gradient:
             with torch.no_grad():
                 _, _, dequantized_scales = fit_kmeans_1d(
@@ -88,9 +90,6 @@ class QuantizedWeight(nn.Module):
         else:  # train scale codebook only
             return self.scales_clusters.gather(1, self.scales_indices)[:, :, None, None]
 
-    def get_zeros(self):
-        return None
-
     @torch.no_grad()
     def requantize_(self, XTX: torch.Tensor, reference_weight: torch.Tensor, *, beam_size: int, **kwargs):
         """
@@ -99,33 +98,28 @@ class QuantizedWeight(nn.Module):
         :note: if XTX is divided by dataset size, this function will return *mean* squared error
         :param reference_weight: original weight matrix that is being quantized, shape: [out_features, in_features]
         :param beam_size: consider up to this many best encoding combinations
-        :param sparsity_regularizer: subtract this value from beam search objective each time you have a zero code somewhere
-        :param verbose: if True, draw a progressbar and periodically print best loss
-
+        Any additional keyword arguments are forwarded to beam_search_optimal_codes
         """
         with torch.no_grad():
             quantized_scales = self.get_scales()
-            quantized_zeros = self.get_zeros()
-
         self.codes[...] = beam_search_optimal_codes(
             XTX=XTX, reference_weight=reference_weight, codebooks=self.codebooks, prev_codes=self.codes,
-            scales=quantized_scales, zeros=quantized_zeros, beam_size=beam_size, **kwargs
+            scales=quantized_scales, beam_size=beam_size, **kwargs
         )
 
 
 @torch.inference_mode()
 def beam_search_optimal_codes(
-        *,
-        XTX: torch.Tensor,
-        reference_weight: torch.Tensor,
-        codebooks: torch.Tensor,
-        prev_codes: torch.IntTensor,
-        scales: Optional[torch.Tensor],
-        zeros: Optional[torch.Tensor],
-        beam_size: int,
-        dim_rng: Optional[random.Random] = None,
-        sparsity_regularizer: float = 0,
-        verbose: bool,
+    *,
+    XTX: torch.Tensor,
+    reference_weight: torch.Tensor,
+    codebooks: torch.Tensor,
+    prev_codes: torch.IntTensor,
+    scales: Optional[torch.Tensor],
+    beam_size: int,
+    dim_rng: Optional[random.Random] = None,
+    sparsity_regularizer: float = 0,
+    verbose: bool,
 ):
     """
     :param XTX: pairwise products of input features matmul(X.transpose(), X), shape: [in_features, in_features]
@@ -133,12 +127,10 @@ def beam_search_optimal_codes(
     :param reference_weight: original weight matrix that is being quantized, shape: [out_features, in_features]
     :param codebooks: look-up tables of codes, shape: [num_codebooks, codebook_size, out_group_siz, in_group_size]
     :param prev_codes: previous-best integer weight codes, shape: [num_out_groups, num_in_groups, num_codebooks]
-    :param scales: weight will be multiplied by this factor, [num_out_groups, num_in_groups, 1, 1]
-    :param zeros: adds this to weight, shape [num_out_groups, num_in_groups, 1, 1]
+    :param scales: weight will be multiplied by this factor, shape = [num_out_groups, num_in_groups or 1, 1, 1]
     :param dim_rng: a source of randomness to (optionally) shuffle the order in which the beam search runs
       None = update dimensions and codebooks in their natural order (0, 1, ..., n)
       random.Random(optional_seed) = shuffle dimensions at random, optionally using the specified seed
-
 
     :param beam_size: consider up to this many best encoding combinations
     :param sparsity_regularizer: subtract this value from beam search objective each time you have a zero code somewhere
@@ -172,7 +164,7 @@ def beam_search_optimal_codes(
     in_features = num_in_groups * in_group_size
     out_features = num_out_groups * out_group_size
     assert reference_weight.shape == (out_features, in_features)
-    prev_weight = _reconstruct_weight(prev_codes, codebooks, scales, zeros)
+    prev_weight = _reconstruct_weight(prev_codes, codebooks, scales)
 
     # initialize all beam codes as previous codes - so they can be updated during beam search
     beam_codes = prev_codes.unsqueeze(0)
@@ -199,7 +191,7 @@ def beam_search_optimal_codes(
         for codebook_index in _make_range(num_codebooks):
             ### part 1: compute losses for every possible candidate for one given codebook and input group.
             # Currently, we compute errors for all output features in parallel in a vectorized fashion.
-            best_squared_errors, best_indices = _beam_search_squared_errors(
+            best_losses, best_indices = _beam_search_squared_errors(
                 XTX=XTX, reference_weight=reference_weight, codebooks=codebooks, scales=scales,
                 beam_losses=beam_losses, beam_codes=beam_codes, beam_weights=beam_weights,
                 input_group_index=input_group_index, codebook_index=codebook_index,
@@ -209,9 +201,9 @@ def beam_search_optimal_codes(
             # part 2: select beam_size new best codes and re-arrange beam to account for the fact that ...
             # ... sometimes two or more top candidates originate from the same source in previous beam
             beam_codes, beam_weights, beam_losses = _beam_search_select_best(
-                beam_codes, beam_weights, codebooks, scales, zeros,
-                input_group_index, codebook_index, best_squared_errors, best_indices,
-                beam_size
+                beam_codes=beam_codes, beam_weights=beam_weights, codebooks=codebooks, scales=scales,
+                input_group_index=input_group_index, codebook_index=codebook_index,
+                best_losses=best_losses, best_indices=best_indices, beam_size=beam_size
             )
 
             if verbose:
@@ -244,14 +236,12 @@ def maybe_script(fn: callable) -> callable:
 
 @maybe_script
 def _reconstruct_weight(
-        codes: torch.IntTensor, codebooks: torch.Tensor,
-        scales: Optional[torch.Tensor] = None, zeros: Optional[torch.Tensor] = None) -> torch.Tensor:
+        codes: torch.IntTensor, codebooks: torch.Tensor, scales: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Decode float weights from quantization codes. Differentiable.
     :param codes: tensor of integer quantization codes, shape [*dims, num_out_groups, num_in_groups, num_codebooks]
     :param codebooks: tensor of vectors for each quantization code, [num_codebooks, codebook_size, out_group_size, in_group_size]
     :param scales: weight will be multiplied by this factor, must be broadcastble with [*dims, out_groups, num_in_groups, out_group_size, in_group_size]
-    :param zeros: adds this to weight, must be broadcastble with [*dims, out_groups, num_in_groups, out_group_size, in_group_size]
     :return: reconstructed weight tensor of shape [*dims, num_in_groups*group_size]
     """
     num_out_groups, num_in_groups, num_codebooks = codes.shape[-3:]
@@ -272,8 +262,6 @@ def _reconstruct_weight(
     )
     if scales is not None:
         reconstructed_weight_groupwise = reconstructed_weight_groupwise.mul(scales)
-    if zeros is not None:
-        reconstructed_weight_groupwise = reconstructed_weight_groupwise.add(zeros)
     return reconstructed_weight_groupwise.swapaxes(-3, -2).reshape(list(codes.shape[:-3]) + [out_features, in_features])
 
 
@@ -312,7 +300,7 @@ def _beam_search_squared_errors(
     prev_codes_part = beam_codes[:, :, input_group_index, codebook_index]  # [beam_size, num_out_groups]
 
     if scales is not None:
-        scales_part = scales[:, input_group_index, :, :]  # [num_out_groups, 1, 1]
+        scales_part = scales[:, input_group_index % scales.shape[1], :, :]  # [num_out_groups, 1, 1]
     else:
         scales_part = torch.empty(0, device=XTX.device)
     prev_part_dequantized = F.embedding(
@@ -343,7 +331,7 @@ def _beam_search_squared_errors(
     if scales is not None:
         XnewBkC_norms_sq = XnewBkC_norms_sq.mul(scales_part.square().reshape(1, num_out_groups))
 
-    best_squared_errors = torch.empty(
+    best_losses = torch.empty(
         (beam_size, k_best, num_out_groups), dtype=XTX.dtype, device=XTX.device
     )  # shape: [beam_size, k_best, num_out_groups]
     best_indices = torch.empty(
@@ -381,16 +369,15 @@ def _beam_search_squared_errors(
 
         best_beam_squared_errors, best_beam_indices = torch.topk(
             candidate_squared_errors, k_best, dim=0, largest=False, sorted=False)
-        best_squared_errors[beam_id] = best_beam_squared_errors
+        best_losses[beam_id] = best_beam_squared_errors
         best_indices[beam_id] = best_beam_indices
 
-    return best_squared_errors, best_indices
+    return best_losses, best_indices
 
 
 @maybe_script
 def _beam_search_select_best(
-        beam_codes: torch.Tensor, beam_weights: torch.Tensor, codebooks: torch.Tensor,
-        scales: Optional[torch.Tensor], zeros: Optional[torch.Tensor],
+        beam_codes: torch.Tensor, beam_weights: torch.Tensor, codebooks: torch.Tensor, scales: Optional[torch.Tensor],
         input_group_index: int, codebook_index: int, best_losses: torch.Tensor,
         best_indices: torch.Tensor, beam_size: int,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -400,7 +387,6 @@ def _beam_search_select_best(
     :param beam_weights: a tensor with de-quantized beam_codes, shape: [beam_size, out_features, in_features]
     :param codebooks: a tensor with look-up tables of codes, shape: [num_codebooks, codebook_size, out_group_size, in_group_size]
     :param scales: weight will be multiplied by this factor, [num_out_groups, num_in_groups, 1, 1]
-    :param zeros: adds this to weight, shape [num_out_groups, num_in_groups, 1, 1]
 
     :param input_group_index: an index of one group of in_features that is being re-encoded
     :param codebook_index: an index of one codebook for that group of features that is being re-encoded
@@ -438,7 +424,7 @@ def _beam_search_select_best(
         new_beam_codes[beam_index, :, input_group_index, codebook_index] = \
             best_hypo_codes[beam_index, :]
         new_beam_weights[beam_index, :, :] = _reconstruct_weight(
-            new_beam_codes[beam_index, ...], codebooks, scales, zeros)
+            new_beam_codes[beam_index, ...], codebooks, scales)
 
     # Note: the code above can be further accelerated by 1) vectorzing loop and ...
     # ... 2) updating new_beam_weights only for the chosen input group
