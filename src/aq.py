@@ -12,21 +12,19 @@ from tqdm.auto import trange
 
 class QuantizedWeight(nn.Module):
     EPS = 1e-9
+
     def __init__(self, *,
                  reference_weight: torch.Tensor,
                  in_group_size: int,
                  out_group_size: int,
                  num_codebooks: int,
                  nbits_per_codebook: int = 8,
-                 device: Optional[torch.device] = None,
-                 scales_nbits: int = 0,
-                 zeros_nbits: int = 0,
+                 scale_nbits: int = 0,
+                 straight_through_gradient: Optional[bool] = None,
                  **init_kwargs
                  ):
         super().__init__()
         out_features, in_features = reference_weight.shape
-        if device is None:
-            device = reference_weight.device
         assert in_features % in_group_size == 0
         assert out_features % out_group_size == 0
 
@@ -35,33 +33,34 @@ class QuantizedWeight(nn.Module):
         self.nbits_per_codebook = nbits_per_codebook
         self.codebook_size = codebook_size = 2 ** nbits_per_codebook
 
-        self.zeros = self.scales = None
-        self.scales_nbits = scales_nbits
-        self.zeros_nbits = zeros_nbits
+        self.scales = self.scales_clusters = self.scales_indices = None
+        if straight_through_gradient is None and scale_nbits > 0:
+            straight_through_gradient = scale_nbits >= 6
+        self.straight_through_gradient = straight_through_gradient
+        self.scale_nbits = scale_nbits
         weight_for_init = reference_weight
 
-        if scales_nbits > 0 or zeros_nbits > 0:
+        if scale_nbits > 0:
             with torch.no_grad():
                 weight_groupwise = reference_weight.reshape(
                     out_features // out_group_size, out_group_size,
                     in_features // in_group_size, in_group_size
                 ).swapaxes(1, 2)  # [num_out_groups, num_in_groups, out_group_size, in_group_size]
-                if zeros_nbits > 0:
-                    zeros = weight_groupwise.mean(dim=(-2, -1), keepdim=True)  # [num_out_groups, num_in_groups]
-                    self.zeros = nn.Parameter(zeros, requires_grad=True)
-                else:
-                    zeros = torch.zeros(*weight_groupwise.shape[:2], 1, 1,
-                                        device=device, dtype=reference_weight.dtype)
-                if scales_nbits > 0:
-                    scales = (weight_groupwise - zeros).norm(
-                        dim=(-2, -1), keepdim=True) + self.EPS  # [num_out_groups, num_in_groups, 1, 1]
+                scales = weight_groupwise.norm(
+                    dim=(-2, -1), keepdim=True) + self.EPS  # [num_out_groups, num_in_groups, 1, 1]
+                self.scales_are_lossless = scale_nbits >= 16 or (2 ** scale_nbits >= scales.shape[1])
+
+                if self.scales_are_lossless or self.straight_through_gradient:
+                    # ^-- this checks if scales can be preserved losslessly
                     self.scales = nn.Parameter(scales, requires_grad=True)
                 else:
-                    scales = torch.ones(*weight_groupwise.shape[:2], 1, 1,
-                                        device=device, dtype=reference_weight.dtype)
+                    scales_clusters, scales_indices, _ = fit_kmeans_1d(
+                        scales.flatten(1, -1), k=2 ** scale_nbits
+                    )
+                    self.scales_clusters = nn.Parameter(scales_clusters, requires_grad=True)
+                    self.scales_indices = nn.Parameter(scales_indices, requires_grad=False)
 
-                weight_groupwise = (weight_groupwise - zeros) / scales
-                weight_for_init = weight_groupwise.swapaxes(1, 2).reshape_as(reference_weight)
+                weight_for_init = (weight_groupwise / scales).swapaxes(1, 2).reshape_as(reference_weight)
                 del weight_groupwise
 
         codes, codebooks = init_aq_kmeans(
@@ -72,25 +71,25 @@ class QuantizedWeight(nn.Module):
         self.codebooks = nn.Parameter(codebooks, requires_grad=True)
         self.codes = nn.Parameter(codes, requires_grad=False)
 
-    def forward(self, input):
-        """Multiply :input: by the quantized weight matrix"""
-        raise NotImplementedError()
-
     def get_scales(self):
-        if self.scales is None:
+        if self.scale_nbits == 0:
             return None
-        scales = self.scales
-        if self.scales_nbits < 16:
-            scales = straight_through_quantize(scales, nbits=self.scales_nbits)
-        return scales
+        elif self.scales_are_lossless:
+            return self.scales  # scales are not quantized or the quantization is lossles
+        elif self.straight_through_gradient:
+            with torch.no_grad():
+                _, _, dequantized_scales = fit_kmeans_1d(
+                    self.scales.flatten(1, -1), k=2 ** self.scale_nbits,
+                )
+                dequantized_scales = dequantized_scales.reshape_as(self.scales)
+            if torch.is_grad_enabled() and self.scales.requires_grad:
+                dequantized_scales = dequantized_scales + (self.scales - self.scales.detach())
+            return dequantized_scales
+        else:  # train scale codebook only
+            return self.scales_clusters.gather(1, self.scales_indices)[:, :, None, None]
 
     def get_zeros(self):
-        if self.zeros is None:
-            return None
-        zeros = self.zeros
-        if self.zeros_nbits < 16:
-            zeros = straight_through_quantize(zeros, nbits=self.zeros_nbits)
-        return zeros
+        return None
 
     @torch.no_grad()
     def requantize_(self, XTX: torch.Tensor, reference_weight: torch.Tensor, *, beam_size: int, **kwargs):
@@ -136,6 +135,10 @@ def beam_search_optimal_codes(
     :param prev_codes: previous-best integer weight codes, shape: [num_out_groups, num_in_groups, num_codebooks]
     :param scales: weight will be multiplied by this factor, [num_out_groups, num_in_groups, 1, 1]
     :param zeros: adds this to weight, shape [num_out_groups, num_in_groups, 1, 1]
+    :param dim_rng: a source of randomness to (optionally) shuffle the order in which the beam search runs
+      None = update dimensions and codebooks in their natural order (0, 1, ..., n)
+      random.Random(optional_seed) = shuffle dimensions at random, optionally using the specified seed
+
 
     :param beam_size: consider up to this many best encoding combinations
     :param sparsity_regularizer: subtract this value from beam search objective each time you have a zero code somewhere
@@ -237,20 +240,6 @@ def maybe_script(fn: callable) -> callable:
     # this is a reserved variable that must be set to TPU address (e.g. grpc://11.22.33.44:1337) for TPU to function
     should_script = int(os.environ.get("AQ_USE_JIT", not using_tpu))
     return torch.jit.script(fn) if should_script else fn
-
-
-def straight_through_quantize(
-        values: torch.Tensor, nbits: int, max_iter: int = 100, clusters: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
-    with torch.no_grad():
-        clusters, indices, quantized_values = fit_kmeans_1d(
-            values.flatten(1, -1), k=2 ** nbits, max_iter=max_iter, initial_clusters=clusters)
-        quantized_values = quantized_values.reshape_as(values)
-
-    if values.requires_grad:
-        quantized_values = quantized_values + (values - values.detach())
-
-    return quantized_values
 
 
 @maybe_script
