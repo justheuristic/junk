@@ -63,7 +63,7 @@ class AQUtil:
             if epoch % args.print_frequency == 0 and verbose:
                 print(f"loss={loss.item():.10f}\t")
             if (epoch + 1) % args.beam_search_epochs == 0:
-                seed_i = random.getrandbytes(256)
+                seed_i = random.getrandbits(256)
                 quantized_weight.requantize_(
                     XTX=self.H, reference_weight=reference_weight, beam_size=args.beam_size,
                     sparsity_regularizer=args.sparsity_regularizer, dim_rng=random.Random(seed_i), verbose=True)
