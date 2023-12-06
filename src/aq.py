@@ -99,11 +99,9 @@ class QuantizedWeight(nn.Module):
         :param beam_size: consider up to this many best encoding combinations
         Any additional keyword arguments are forwarded to beam_search_optimal_codes
         """
-        with torch.no_grad():
-            quantized_scales = self.get_scales()
         self.codes[...] = beam_search_optimal_codes(
             XTX=XTX, reference_weight=reference_weight, codebooks=self.codebooks, prev_codes=self.codes,
-            scales=quantized_scales, beam_size=beam_size, **kwargs
+            scales=self.get_scales(), beam_size=beam_size, **kwargs
         )
 
 
