@@ -379,8 +379,8 @@ def _beam_search_squared_errors(
             candidate_squared_errors += sparsity_regularizer * (prev_codes_part[beam_id] == 0).to(XTX.dtype)[None, :]
             candidate_squared_errors[0, :] -= sparsity_regularizer
 
-        best_beam_squared_errors, best_beam_indices = torch.topk(candidate_squared_errors, k_best, dim=0, largest=False,
-                                                                 sorted=False)
+        best_beam_squared_errors, best_beam_indices = torch.topk(
+            candidate_squared_errors, k_best, dim=0, largest=False, sorted=False)
         best_squared_errors[beam_id] = best_beam_squared_errors
         best_indices[beam_id] = best_beam_indices
 
@@ -419,9 +419,10 @@ def _beam_search_select_best(
     _prev_beam_size, num_out_groups, num_in_groups, num_codebooks = beam_codes.shape
     flat_best = best_losses.flatten(0, 1).topk(dim=0, k=beam_size, largest=False)
     best_hypo_source_ids = flat_best.indices // k_best
-    best_hypo_codes = best_indices.flatten(0, 1)[flat_best.indices, torch.arange(num_out_groups)].reshape(beam_size,
-                                                                                                          out_features)
-    # ^-- shape: [beam_size, out_features]
+    arange_out_groups = torch.arange(num_out_groups, device=device)
+    best_hypo_codes = best_indices.flatten(
+        0, 1)[flat_best.indices, arange_out_groups].reshape(beam_size, num_out_groups)
+    # ^-- shape: [beam_size, num_out_groups]
 
     # reorder beam codes and weights
     new_beam_codes = torch.full(
@@ -430,15 +431,14 @@ def _beam_search_select_best(
         device=device
     )  # [beam_size, num_out_groups, num_in_groups, num_codebooks]
     new_beam_weights = torch.empty(len(best_hypo_codes), out_features, in_features, dtype=dtype, device=device)
-    arange_out_groups = torch.arange(num_out_groups, device=device)
 
     for beam_index in range(len(best_hypo_codes)):
         new_beam_codes[beam_index, :, ...] = \
             beam_codes[best_hypo_source_ids[beam_index, :], arange_out_groups, ...]
         new_beam_codes[beam_index, :, input_group_index, codebook_index] = \
             best_hypo_codes[beam_index, :]
-        new_beam_weights[beam_index, :, :] = _reconstruct_weight(new_beam_codes[beam_index, ...], codebooks, scales,
-                                                                 zeros)
+        new_beam_weights[beam_index, :, :] = _reconstruct_weight(
+            new_beam_codes[beam_index, ...], codebooks, scales, zeros)
 
     # Note: the code above can be further accelerated by 1) vectorzing loop and ...
     # ... 2) updating new_beam_weights only for the chosen input group
