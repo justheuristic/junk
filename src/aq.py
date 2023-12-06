@@ -1,13 +1,13 @@
-import functools
-import os
 import random
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from src.kmeans_1d import fit_kmeans_1d
 from tqdm.auto import trange
+
+from src.kmeans import fit_kmeans, fit_kmeans_1d
+from src.utils import maybe_script
 
 
 class QuantizedWeight(nn.Module):
@@ -223,16 +223,6 @@ def beam_search_optimal_codes(
 
                 progressbar.desc = info
     return beam_codes[0]
-
-
-@functools.lru_cache()
-def maybe_script(fn: callable) -> callable:
-    """Apply torch.jit.script to function unless one is using TPU. TPU does not support torch.jit.script."""
-    using_tpu = bool(os.environ.get("TPU_NAME"))
-    # this is a reserved variable that must be set to TPU address (e.g. grpc://11.22.33.44:1337) for TPU to function
-    should_script = int(os.environ.get("AQ_USE_JIT", not using_tpu))
-    return torch.jit.script(fn) if should_script else fn
-
 
 @maybe_script
 def _reconstruct_weight(
@@ -476,72 +466,3 @@ def init_aq_kmeans(reference_weight: torch.Tensor, *,
     codebooks = torch.cat(codebooks, dim=0)
     codes = torch.cat(codes, dim=-1)
     return codes, codebooks
-
-
-@maybe_script
-def _kmeans_greedy_init(data: torch.Tensor, k: int) -> torch.Tensor:
-    """Get initial clusters by iteratively choosing a vector that is the farthest from already selected clusters"""
-    clusters = torch.zeros(k, data.shape[1], device=data.device)
-    running_min_distances = torch.full((data.shape[0],), torch.inf, device=data.device, dtype=data.dtype)
-    data_norm_squared = data.norm(p=2, dim=1).square()
-
-    for i in range(k):
-        clusters[i] = data[running_min_distances.argmax()]
-        distances_to_cluster_i = data_norm_squared - 2 * data @ clusters[i] + clusters[i].norm().square()
-        running_min_distances = torch.minimum(
-            running_min_distances, distances_to_cluster_i, out=running_min_distances)
-    return clusters
-
-
-@maybe_script
-def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: int = 10,
-               rtol: float = 1e-06, atol: float = 1e-08, greedy_init: bool = False, block_size_vals: int = 2 ** 30):
-    """
-    :param data: [nsamples, dim]
-    :param k: number of centroids
-    :param max_iter: run at most this many iterations
-    :param check_every: check for convergence (allclose(new_centroids, old_centroids)) once in this many steps
-    :param rtol: early stopping relative tolerance for centroids
-    :param atol: early stopping absolute tolerance for centroids
-    :param greedy_init: if True, init by greedily selecting the point that is farthest from any cluster
-        if False (default), initialize with random points using pytorch global RNG
-    :param block_size_vals: how many dot products to compute at a time
-    :return: (clusters float[k, dim], data_indices int[nsamples], reconstructed_data: float[nsamples, dim])
-    """
-    if greedy_init:
-        clusters = _kmeans_greedy_init(data, k)
-    else:
-        clusters = data[torch.randperm(data.shape[0])[:k], :]  # [k, dim]
-
-    nearest_indices = torch.empty(len(data), dtype=torch.int64, device=data.device)
-    block_size = block_size_vals // k
-    for i in range(max_iter):
-        for block_start in range(0, len(data), block_size):
-            nearest_indices[block_start: block_start + block_size] = torch.addmm(
-                torch.bmm(clusters[:, None, :], clusters[:, :, None]).flatten(),
-                data[block_start: block_start + block_size], clusters.T, beta=-0.5
-            ).argmax(1)
-        # note: the above formula equals to - 0.5 || data[:, None, :] - clusters[None, :, :] || ^ 2 + const
-
-        new_clusters = torch.zeros_like(clusters).index_reduce_(
-            dim=0, index=nearest_indices, source=data, reduce='mean', include_self=False)
-
-        if i % check_every == 0:
-            if torch.allclose(new_clusters, clusters, rtol=rtol, atol=atol):
-                break
-        clusters = new_clusters
-    for block_start in range(0, len(data), block_size):
-        nearest_indices[block_start: block_start + block_size] = torch.addmm(
-            torch.bmm(clusters[:, None, :], clusters[:, :, None]).flatten(),
-            data[block_start: block_start + block_size], clusters.T, beta=-0.5
-        ).argmax(1)
-    reconstructed_data = clusters[nearest_indices]
-    return clusters, nearest_indices, reconstructed_data
-
-
-@maybe_script
-def find_nearest_cluster(data, clusters):
-    """Find nearest clusters and return their indices"""
-    return torch.addmm(
-        torch.bmm(clusters[:, None, :], clusters[:, :, None]).flatten(), data, clusters.T, beta=-0.5
-    ).argmax(1)

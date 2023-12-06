@@ -1,15 +1,18 @@
 import os
 import sys
 import time
-from tqdm.auto import trange
+
 import ipynbname  # pip install ipynbname
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
+from tqdm.auto import trange
 
-from src.aq import QuantizedWeight, _reconstruct_weight  # see adjacent file (aq.py)
-from src.utils import calc_avg_bits, get_mean_nbits_by_codebook  # see adjacent file (aq.py)
+from src.aq import (QuantizedWeight,  # see adjacent file (aq.py)
+                    _reconstruct_weight)
+from src.utils import (calc_avg_bits,  # see adjacent file (aq.py)
+                       get_mean_nbits_by_codebook)
 
 try:
     import wandb

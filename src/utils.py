@@ -1,5 +1,9 @@
-import torch
+import functools
+import os
+
 import huffman
+import torch
+
 
 def calc_avg_bits(
     num_codebooks: int = 8,
@@ -66,3 +70,12 @@ def get_mean_nbits_by_codebook(codes: torch.IntTensor, huffman_group_size: int =
         )
         mean_code_lengths.append(codebook_mean_code_length_i)
     return mean_code_lengths
+
+
+@functools.lru_cache()
+def maybe_script(fn: callable) -> callable:
+    """Apply torch.jit.script to function unless one is using TPU. TPU does not support torch.jit.script."""
+    using_tpu = bool(os.environ.get("TPU_NAME"))
+    # this is a reserved variable that must be set to TPU address (e.g. grpc://11.22.33.44:1337) for TPU to function
+    should_script = int(os.environ.get("AQ_USE_JIT", not using_tpu))
+    return torch.jit.script(fn) if should_script else fn
