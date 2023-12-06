@@ -342,17 +342,11 @@ def _beam_search_squared_errors(
         if scales is not None:
             delta_weights_i = delta_weights_i.mul(scales_part)
 
-        if out_group_size * in_group_size >= 128:
-            dot_products = torch.matmul(
-                dWTXTXg.view(beam_size, 1, num_out_groups, 1, out_group_size * in_group_size)[beam_id],
-                delta_weights_i.view(codebook_size, num_out_groups, out_group_size * in_group_size, 1),
-            ).reshape(codebook_size, num_out_groups)
-        else:  # equivalent computation, but tested to be faster on GPU
-            dot_products = torch.einsum(
-                'mog,og->mo',
-                delta_weights_i.view(codebook_size, num_out_groups, out_group_size * in_group_size),
-                dWTXTXg[beam_id].view(num_out_groups, out_group_size * in_group_size)
-            )  # [codebook_size, num_out_groups]
+        dot_products = torch.einsum(
+            'mog,og->mo',
+            delta_weights_i.view(codebook_size, num_out_groups, out_group_size * in_group_size),
+            dWTXTXg[beam_id].view(num_out_groups, out_group_size * in_group_size)
+        )  # [codebook_size, num_out_groups]
 
         XoldBkC_norms_sq = torch.bmm(
             (prev_weight_part[beam_id] @ XTX[input_group_slice, input_group_slice]).view(
