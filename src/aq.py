@@ -38,7 +38,6 @@ class QuantizedWeight(nn.Module):
             straight_through_gradient = scale_nbits >= 6
         self.straight_through_gradient = straight_through_gradient
         self.scale_nbits = scale_nbits
-        weight_for_init = reference_weight
 
         with torch.no_grad():
             weight_groupwise = reference_weight.reshape(
