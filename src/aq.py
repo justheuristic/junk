@@ -1,5 +1,5 @@
 import random
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any, Dict
 
 import torch
 import torch.nn as nn
@@ -12,6 +12,13 @@ from src.utils import maybe_script
 
 class QuantizedWeight(nn.Module):
     EPS = 1e-9
+    init_params: Tuple[Tuple[Any, ...], Dict[str, Any]]  # only present if created via create_with_init_params
+
+    @classmethod
+    def create_with_init_params(cls, *args, **kwargs):
+        module = cls(*args, **kwargs)
+        module.init_params = args, kwargs
+        return module
 
     def __init__(self, *,
                  reference_weight: torch.Tensor,
@@ -88,6 +95,7 @@ class QuantizedWeight(nn.Module):
             return dequantized_scales
         else:  # train scale codebook only
             return self.scales_clusters.gather(1, self.scales_indices)[:, :, None, None]
+
 
     @torch.no_grad()
     def requantize_(self, XTX: torch.Tensor, reference_weight: torch.Tensor, *, beam_size: int, **kwargs):
