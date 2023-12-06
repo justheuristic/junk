@@ -7,7 +7,7 @@ from tqdm.auto import trange
 from src.aq import QuantizedWeight
 
 
-class GPTAQUtil:
+class AQUtil:
     """Learns GPTQ for a single linear layer"""
 
     def __init__(self, layer):
