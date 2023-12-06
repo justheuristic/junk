@@ -376,98 +376,62 @@ if __name__ == "__main__":
         "--lr",
         type=float,
         default=1e-4,
-        help="relative threshold for     outliers; higher threshold = more outliers.",
+        help="learning rate for codebook Adam",
     )
     parser.add_argument(
         "--num_codebooks",
         type=int,
-        default=10,
-        help="#Number of codebooks.",
+        default=1,
+        help="#Number of codebooks per layer",
     )
-
     parser.add_argument(
         "--out_group_size",
         type=int,
         default=1,
-        help="Out group size .",
+        help="how many output units are quantized together",
     )
     parser.add_argument(
         "--in_group_size",
         type=int,
-        default=32,
-        help="Input group size.",
-    )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=16384,
-        help="Batch size.",
+        default=8,
+        help="how many input features are quantized together",
     )
     parser.add_argument(
         "--beam_size",
         type=int,
         default=1,
-        help="Standart beam size.",
-    )
-    parser.add_argument(
-        "--big_beam_size",
-        type=int,
-        default=6,
-        help="Big beam size.",
+        help="Keep top-(this_many) best candidates for each codebook when finding optimal codes",
     )
     parser.add_argument(
         "--nbits_per_codebook",
         type=int,
-        default=12,
-        help="Codebook size 2**nbits_per_codebook .",
+        default=16,
+        help="each codebook will contain 2 ** nbits_per_codebook vectors",
     )
     parser.add_argument(
         "--beam_search_epochs",
         type=int,
         default=100,
-        help="Beam search epoch .",
-    )
-    parser.add_argument(
-        "--big_beam_search_epochs",
-        type=int,
-        default=1000,
-        help="Do beam search with big .",
+        help="Run beam search every (this many) Adam updates. Should be removed if we implement fast least squares",
     )
     parser.add_argument(
         "--sparsity_regularizer",
         type=int,
         default=0,
-        help="Sparsity regularizer.",
+        help="An (optional) regularizer that promotes sparsity. Subtracted from loss for each zero code (index)",
     )
-    parser.add_argument(
-        "--alpha",
-        type=float,
-        default=1.0,
-        help="Weight for kmeans initialization.",
-    )
-    parser.add_argument(
-        "--grouped_quant",
-        action="store_true",
-        help="Quantize grouped qkv",
-    )
-    parser.add_argument(
-        "--kmeans_init",
-        action="store_false",
-        help="Init with Kmeans",
-    )
-
     parser.add_argument(
         "--print_frequency",
         type=int,
         default=10,
-        help="Batch size.",
+        help="Print Adam progress after each print_frequency updates",
     )
     parser.add_argument(
         "--dtype",
         type=str,
         default="auto",
         choices=["auto", "float16", "float32"],
-        help="dtype to load the model.",
+        help="dtype to load the model in",
     )
     parser.add_argument("--wandb", action="store_true", help="Whether to use wandb or store locally.")
 
