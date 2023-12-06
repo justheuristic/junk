@@ -191,7 +191,6 @@ def quantize_aq(model, dataloader, args, device):
                 quantized = aq_handlers[sublayer_name].quantize(
                     args=args,
                     verbose=True,
-                    save_quantization=False,
                 )
 
                 if save:
