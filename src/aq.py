@@ -335,18 +335,15 @@ def _beam_search_squared_errors(
         (beam_size, k_best, num_out_groups), dtype=torch.int64, device=XTX.device,
     )
     for beam_id in range(beam_size):
-        delta_weights_i = torch.sub(
-            cand_weights[:, None, :, :],  # note: if scale exists, we scale **after** subtracting (next statement)
-            prev_part_dequantized.view(beam_size, 1, num_out_groups, out_group_size, in_group_size)[beam_id]
-        )  # [codebook_size, num_out_groups, out_group_size, in_group_size]
-        if scales is not None:
-            delta_weights_i = delta_weights_i.mul(scales_part)
-
         dot_products = torch.einsum(
-            'mog,og->mo',
-            delta_weights_i.view(codebook_size, num_out_groups, out_group_size * in_group_size),
+            'mg,og->mo', cand_weights.reshape(codebook_size, out_group_size * in_group_size),
             dWTXTXg[beam_id].view(num_out_groups, out_group_size * in_group_size)
-        )  # [codebook_size, num_out_groups]
+        ).sub_(torch.einsum(
+            'og,og->o', prev_part_dequantized[beam_id].reshape(num_out_groups, out_group_size * in_group_size),
+            dWTXTXg[beam_id].view(num_out_groups, out_group_size * in_group_size)).view(1, num_out_groups)
+        ).view(codebook_size, num_out_groups)
+        if scales is not None:
+            dot_products = dot_products.mul_(scales_part.reshape(1, num_out_groups))
 
         XoldBkC_norms_sq = torch.bmm(
             (prev_weight_part[beam_id] @ XTX[input_group_slice, input_group_slice]).view(
