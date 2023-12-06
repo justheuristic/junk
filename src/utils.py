@@ -1,13 +1,18 @@
-import torch
+import functools
+import os
+
 import huffman
+import torch
+
 
 def calc_avg_bits(
     num_codebooks: int = 8,
     out_group_size: int = 1,
     in_group_size: int = 32,
-    nbits_per_codebook=8,
+    nbits_per_codebook: int = 8,
     in_features: int = 8192,
     out_features: int = 8192,
+    scale_nbits: int = 0
 ):
     '''
     Calculates average bits for parameters in one layer.
@@ -17,15 +22,18 @@ def calc_avg_bits(
     :param nbits_per_codebook: number of bits for codebook
     :param in_features: shape of input dimension of layer
     :param out_features: shape of output dimension of layer
+    :param scale_nbits: number of bits to store a per-group scale factor
     
     '''
-    codebook_size = 2**nbits_per_codebook #codebook size 
+    codebook_size = 2 ** nbits_per_codebook  # codebook size
     codebooks_store = num_codebooks * codebook_size * out_group_size * in_group_size * 16  # bits
     matrix_store = (
         out_features * in_features // (out_group_size * in_group_size) * num_codebooks * nbits_per_codebook
     )  # bits
-    # avg bits per parameter
-    return (matrix_store + codebooks_store) / (in_features * out_features)
+    scale_store = scale_nbits * (out_features // out_group_size) * (in_features // in_group_size)
+    if 0 < scale_nbits < 16 and 2 ** scale_nbits < (in_features // in_group_size):
+        scale_store += (out_features // out_group_size) * 2 ** scale_nbits * 16  # scale quantization codebooks
+    return (matrix_store + codebooks_store + scale_store) / (in_features * out_features)
 
 def get_mean_nbits_by_codebook(codes: torch.IntTensor, huffman_group_size: int = 2):
 
@@ -62,3 +70,12 @@ def get_mean_nbits_by_codebook(codes: torch.IntTensor, huffman_group_size: int =
         )
         mean_code_lengths.append(codebook_mean_code_length_i)
     return mean_code_lengths
+
+
+@functools.lru_cache()
+def maybe_script(fn: callable) -> callable:
+    """Apply torch.jit.script to function unless one is using TPU. TPU does not support torch.jit.script."""
+    using_tpu = bool(os.environ.get("TPU_NAME"))
+    # this is a reserved variable that must be set to TPU address (e.g. grpc://11.22.33.44:1337) for TPU to function
+    should_script = int(os.environ.get("AQ_USE_JIT", not using_tpu))
+    return torch.jit.script(fn) if should_script else fn

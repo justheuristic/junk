@@ -1,12 +1,13 @@
 import math
+import random
 
 import torch
 from tqdm.auto import trange
 
-from src.aq import QuantizedWeight, _reconstruct_weight  # see adjacent file (aq.py)
+from src.aq import QuantizedWeight
 
 
-class GPTAQUtil:
+class AQUtil:
     """Learns GPTQ for a single linear layer"""
 
     def __init__(self, layer):
@@ -36,29 +37,25 @@ class GPTAQUtil:
         *,
         verbose=True,
         args,
-        **kwargs,
     ) -> QuantizedWeight:
         """
         """
         reference_weight = self.layer.weight.detach().cuda().float()
-        quantized_layer = QuantizedWeight(
-            weight_shape=reference_weight.shape,
-            num_codebooks=args.num_codebooks,
-            nbits_per_codebook=args.nbits_per_codebook,
+        quantized_weight = QuantizedWeight.create_with_init_params(
+            reference_weight=reference_weight,
             out_group_size=args.out_group_size,
             in_group_size=args.in_group_size,
-            device=self.dev,
-            init_kmeans=args.kmeans_init,
-            reference_weight=reference_weight,
-            alpha=args.alpha,
+            num_codebooks=args.num_codebooks,
+            nbits_per_codebook=args.nbits_per_codebook,
+            scale_nbits=args.scale_nbits,
+            max_iter=args.init_max_iter,
             verbose=True,
         )
 
-        opt = torch.optim.Adam(quantized_layer.parameters(), lr=args.lr, betas=(0.9, 0.95))
+        opt = torch.optim.Adam(quantized_weight.parameters(), lr=args.lr, betas=(0.0, 0.95), amsgrad=True)
 
         for epoch in trange(args.num_epochs):
-            reconstructed_weight = _reconstruct_weight(quantized_layer.codes, quantized_layer.codebooks)
-            delta_weight = (reconstructed_weight - reference_weight).double()
+            delta_weight = (quantized_weight() - reference_weight).double()
             loss = (delta_weight @ self.H.double()).flatten() @ delta_weight.flatten() / len(delta_weight)
             opt.zero_grad()
             loss.backward()
@@ -66,14 +63,8 @@ class GPTAQUtil:
             if epoch % args.print_frequency == 0 and verbose:
                 print(f"loss={loss.item():.10f}\t")
             if (epoch + 1) % args.beam_search_epochs == 0:
-                if (epoch + 1) % args.big_beam_search_epochs == 0 and verbose:
-                    print("BIG beam search")
-                quantized_layer.requantize_(
-                    self.H,
-                    reference_weight,
-                    beam_size=args.beam_size if (epoch + 1) % args.big_beam_search_epochs != 0 else args.big_beam_size,
-                    sparsity_regularizer=args.sparsity_regularizer,
-                    # tip: use const_hparam * quantized_layer.codes.numel()
-                    verbose=True,
-                )
-        return quantized_layer
+                seed_i = random.getrandbits(256)
+                quantized_weight.requantize_(
+                    XTX=self.H, reference_weight=reference_weight, beam_size=args.beam_size,
+                    sparsity_regularizer=args.sparsity_regularizer, dim_rng=random.Random(seed_i), verbose=True)
+        return quantized_weight

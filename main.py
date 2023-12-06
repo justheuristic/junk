@@ -3,13 +3,10 @@ import time
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import transformers
 from tqdm import trange
 from tqdm.auto import trange
 
-from gptaq_engine import GPTAQUtil
-from src.aq import _reconstruct_weight
+from aq_engine import AQUtil
 from src.datautils import get_loaders
 from src.modelutils import (
     FALCON_TYPES,
@@ -42,7 +39,7 @@ def quantize_model(model, args, device):
         model_path=args.model_path,
         seqlen=model.seqlen,
     )
-    results = quantize_gptaq(model, dataloader, args, device)
+    results = quantize_aq(model, dataloader, args, device)
     print(f"quantization time: {time.time() - tick:.1f}")
     return results
 
@@ -128,8 +125,8 @@ def get_inps(model, data_iterable, args, dev, nsamples=None):
 
 
 @torch.no_grad()
-def quantize_gptaq(model, dataloader, args, device):
-    print("\nStarting GPTAQ quantization ...")
+def quantize_aq(model, dataloader, args, device):
+    print("\nStarting AQ quantization ...")
 
     inps, forward_args = get_inps(model, dataloader, args, dev="cpu" if args.offload_activations else device)
     outs = torch.zeros_like(inps)
@@ -144,7 +141,6 @@ def quantize_gptaq(model, dataloader, args, device):
     layers = get_layers(model)
     for i in range(len(layers)):
         print(f"\n---------------- Layer {i} of {len(layers)} ----------------")
-        normal_outlier_count, w_count = 0, 0
         stats_payload = {}
         start_time = time.time()
 
@@ -168,13 +164,13 @@ def quantize_gptaq(model, dataloader, args, device):
         for names in sequential:
             subset = {n: all_sublayers[n] for n in names}
 
-            gptaq_handlers = {}
+            aq_handlers = {}
             for sublayer_name in subset:
-                gptaq_handlers[sublayer_name] = GPTAQUtil(subset[sublayer_name])
+                aq_handlers[sublayer_name] = AQUtil(subset[sublayer_name])
 
             def add_batch(name):
                 def tmp(_, inp, out):
-                    gptaq_handlers[name].add_batch(inp[0].data)  # noqa: F821
+                    aq_handlers[name].add_batch(inp[0].data)  # noqa: F821
 
                 return tmp
 
@@ -192,24 +188,31 @@ def quantize_gptaq(model, dataloader, args, device):
 
             for sublayer_name in subset:
                 print(f"Quantizing module {sublayer_name} of layer {i}")
-                quantized = gptaq_handlers[sublayer_name].quantize(
+                quantized = aq_handlers[sublayer_name].quantize(
                     args=args,
                     verbose=True,
-                    save_quantization=False,
                 )
 
                 if save:
                     quantized.name = sublayer_name
                     full_path = save + "/" + str(i) + "/"
                     os.makedirs(full_path, exist_ok=True)
-                    torch.save(quantized.state_dict(), full_path + sublayer_name)
+                    print("Saved params:", quantized.init_params)
+                    torch.save((quantized.state_dict(), quantized.init_params), full_path + sublayer_name)
 
-                gptaq_handlers[sublayer_name].layer.weight.data = _reconstruct_weight(
-                    quantized.codes, quantized.codebooks
-                ).to(gptaq_handlers[sublayer_name].layer.weight.data.dtype)
-                overall_bits += torch.numel(quantized.codes) * args.nbits_per_codebook + torch.numel(
-                    quantized.codebooks) * 16
-                model_number_of_params += torch.numel(gptaq_handlers[sublayer_name].layer.weight.data)
+                with torch.no_grad():
+                    aq_handlers[sublayer_name].layer.weight.data = quantized().to(
+                        aq_handlers[sublayer_name].layer.weight.data.dtype)
+
+                weight_avg_bits = calc_avg_bits(
+                    num_codebooks=quantized.num_codebooks, nbits_per_codebook=quantized.nbits_per_codebook,
+                    out_group_size=quantized.out_group_size, in_group_size=quantized.in_group_size,
+                    in_features=aq_handlers[sublayer_name].layer.in_features,
+                    out_features=aq_handlers[sublayer_name].layer.out_features,
+                    scale_nbits=quantized.scale_nbits
+                    )
+                overall_bits += int(weight_avg_bits * torch.numel(aq_handlers[sublayer_name].layer.weight.data))
+                model_number_of_params += torch.numel(aq_handlers[sublayer_name].layer.weight.data)
                 print("curent_avg_bits", overall_bits/model_number_of_params)
                 quantizers["model.layers.%d.%s" % (i, sublayer_name)] = ()  # to be updated
 
@@ -234,7 +237,7 @@ def quantize_gptaq(model, dataloader, args, device):
 
         layers[i] = layer.to(layer_dev_original)
         del layer
-        del gptaq_handlers
+        del aq_handlers
         torch.cuda.empty_cache()
 
         inps, outs = outs, inps
@@ -259,7 +262,6 @@ def quantize_gptaq(model, dataloader, args, device):
             name: param for name, param in model.named_parameters() if param not in already_saved_weights
         }
         torch.save(not_quantized_weights, save + "/not_quantized_weights.pt")
-
 
     if args.wandb:
         wandb.log({"max_cuda_mem_quantize": round(torch.cuda.max_memory_allocated() / 1e9, 2)})
@@ -379,101 +381,79 @@ if __name__ == "__main__":
         help="Number of epochs.",
     )
     parser.add_argument(
+        "--init_max_iter",
+        type=int,
+        default=100,
+        help="Number of iterations used for k-means initializer",
+    )
+    parser.add_argument(
         "--lr",
         type=float,
-        default=1e-5,
-        help="relative threshold for     outliers; higher threshold = more outliers.",
+        default=1e-4,
+        help="learning rate for Adam optimizer",
     )
     parser.add_argument(
         "--num_codebooks",
         type=int,
-        default=10,
-        help="#Number of codebooks.",
+        default=1,
+        help="#Number of codebooks per layer",
     )
-
     parser.add_argument(
         "--out_group_size",
         type=int,
         default=1,
-        help="Out group size .",
+        help="how many output units are quantized together",
     )
     parser.add_argument(
         "--in_group_size",
         type=int,
-        default=32,
-        help="Input group size.",
-    )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=16384,
-        help="Batch size.",
+        default=8,
+        help="how many input features are quantized together",
     )
     parser.add_argument(
         "--beam_size",
         type=int,
         default=1,
-        help="Standart beam size.",
-    )
-    parser.add_argument(
-        "--big_beam_size",
-        type=int,
-        default=6,
-        help="Big beam size.",
+        help="Keep top-(this_many) best candidates for each codebook when finding optimal codes",
     )
     parser.add_argument(
         "--nbits_per_codebook",
         type=int,
-        default=12,
-        help="Codebook size 2**nbits_per_codebook .",
+        default=16,
+        help="each codebook will contain 2 ** nbits_per_codebook vectors",
+    )
+    parser.add_argument(
+        "--scale_nbits",
+        type=int,
+        default=0,
+        help="Number of bits dedicated to the learnable group-wise scale. 0 means do not use group-wise scales "
+             "(still has row-wise scales), 1-15 means using per-group scales quantized to this many bits, "
+             "16+ means use per-group scales but do not quantize them"
     )
     parser.add_argument(
         "--beam_search_epochs",
         type=int,
         default=100,
-        help="Beam search epoch .",
-    )
-    parser.add_argument(
-        "--big_beam_search_epochs",
-        type=int,
-        default=1000,
-        help="Do beam search with big .",
+        help="Run beam search every (this many) Adam updates. Should be removed if we implement fast least squares",
     )
     parser.add_argument(
         "--sparsity_regularizer",
         type=int,
         default=0,
-        help="Sparsity regularizer.",
+        help="An (optional) regularizer that promotes sparsity. Subtracted from loss for each zero code (index)",
     )
-    parser.add_argument(
-        "--alpha",
-        type=float,
-        default=1.0,
-        help="Weight for kmeans initialization.",
-    )
-    parser.add_argument(
-        "--grouped_quant",
-        action="store_true",
-        help="Quantize grouped qkv",
-    )
-    parser.add_argument(
-        "--kmeans_init",
-        action="store_false",
-        help="Init with Kmeans",
-    )
-
     parser.add_argument(
         "--print_frequency",
         type=int,
         default=10,
-        help="Batch size.",
+        help="Print Adam progress after each print_frequency updates",
     )
     parser.add_argument(
         "--dtype",
         type=str,
         default="auto",
         choices=["auto", "float16", "float32"],
-        help="dtype to load the model.",
+        help="dtype to load the model in",
     )
     parser.add_argument("--wandb", action="store_true", help="Whether to use wandb or store locally.")
 
@@ -487,8 +467,9 @@ if __name__ == "__main__":
                 + f"_out_group_size_{args.out_group_size}"
                 + f"_in_group_size_{args.in_group_size}"
                 + f"_nbits_per_codebook_{args.nbits_per_codebook}"
+                + f"_scale_nbits_{args.scale_nbits}"
                 + f"_beam_search_epochs_{args.beam_search_epochs}"
-                + f"_big_beam_search_epochs_{args.big_beam_search_epochs}"
+                + f"_init_max_iter{args.init_max_iter}"
         )
         args.group_size = args.in_group_size * args.out_group_size
 
@@ -497,9 +478,9 @@ if __name__ == "__main__":
             name=args.exp_name,
             config={a: getattr(args, a) for a in dir(args) if not a.startswith("_")},
             settings=wandb.Settings(code_dir="."),
+            project=os.environ.get("WANDB_PROJECT", f"AQ_{list(filter(len, args.model_path.split('/')))[-1]}"),
+            entity=os.environ.get("WANDB_ENTITY", "rock-and-roll"),
             save_code=True,
-            project="AddQuantization",
-            entity="rock-and-roll",
         )
 
     torch.set_num_threads(16)

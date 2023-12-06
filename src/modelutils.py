@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from tqdm import trange
 from transformers import AutoConfig, AutoModelForCausalLM
-from src.aq import _reconstruct_weight
+from src.aq import _reconstruct_weight, QuantizedWeight
 
 MODEL_ERROR_MSG = "Unsupported model type {} - only 'llama', 'Yi', 'opt' and 'falcon' are supported"
 FALCON_TYPES = ("falcon", "refinedweb", "refinedwebmodel")
@@ -156,8 +156,11 @@ def load_quantized_model(model, load_path):
         layer = layers[i]
         sub_layers = find_sublayers(layer)
         for name in sub_layers:
-            quantized_params_dict = read_quant_weight_from_file(load_path, i, name)
-            sub_layers[name].weight = _reconstruct_weight(quantized_params_dict['codes'],quantized_params_dict['codebooks']).to(sub_layers[name].weight.data.dtype)
+            state_dict, (init_args, init_kwargs) = read_quant_weight_from_file(load_path, i, name)
+            quantized_weight = QuantizedWeight(*init_args, **init_kwargs)
+            quantized_weight.load_state_dict(state_dict)
+            with torch.no_grad():
+                sub_layers[name].weight = quantized_weight()
         layers[i] = layer
     model.load_state_dict(torch.load(load_path + "/not_quantized_weights.pt"), strict=False)
     return model
