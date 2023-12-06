@@ -478,9 +478,9 @@ if __name__ == "__main__":
             name=args.exp_name,
             config={a: getattr(args, a) for a in dir(args) if not a.startswith("_")},
             settings=wandb.Settings(code_dir="."),
+            project=os.environ.get("WANDB_PROJECT", f"AQ_{list(filter(len, args.model_path.split('/')))[-1]}"),
+            entity=os.environ.get("WANDB_ENTITY", "rock-and-roll"),
             save_code=True,
-            project="AddQuantization",
-            entity="rock-and-roll",
         )
 
     torch.set_num_threads(16)
