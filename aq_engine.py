@@ -41,7 +41,7 @@ class AQUtil:
         """
         """
         reference_weight = self.layer.weight.detach().cuda().float()
-        quantized_weight = QuantizedWeight(
+        quantized_weight = QuantizedWeight.create_with_init_params(
             reference_weight=reference_weight,
             out_group_size=args.out_group_size,
             in_group_size=args.in_group_size,

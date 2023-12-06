@@ -197,7 +197,8 @@ def quantize_aq(model, dataloader, args, device):
                     quantized.name = sublayer_name
                     full_path = save + "/" + str(i) + "/"
                     os.makedirs(full_path, exist_ok=True)
-                    torch.save(quantized.state_dict(), full_path + sublayer_name)
+                    print("Saved params:", quantized.init_params)
+                    torch.save((quantized.state_dict(), quantized.init_params), full_path + sublayer_name)
 
                 with torch.no_grad():
                     aq_handlers[sublayer_name].layer.weight.data = quantized().to(
