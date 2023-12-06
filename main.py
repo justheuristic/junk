@@ -382,7 +382,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--init_max_iter",
         type=int,
-        default=50,
+        default=100,
         help="Number of iterations used for k-means initializer",
     )
     parser.add_argument(
