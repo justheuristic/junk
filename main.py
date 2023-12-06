@@ -3,13 +3,10 @@ import time
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import transformers
 from tqdm import trange
 from tqdm.auto import trange
 
-from gptaq_engine import GPTAQUtil
-from src.aq import _reconstruct_weight
+from aq_engine import AQUtil
 from src.datautils import get_loaders
 from src.modelutils import (
     FALCON_TYPES,
@@ -20,7 +17,6 @@ from src.modelutils import (
     get_model_head,
     get_sequential_groups,
 )
-from src.utils import calc_avg_bits
 
 try:
     import wandb
@@ -42,7 +38,7 @@ def quantize_model(model, args, device):
         model_path=args.model_path,
         seqlen=model.seqlen,
     )
-    results = quantize_gptaq(model, dataloader, args, device)
+    results = quantize_aq(model, dataloader, args, device)
     print(f"quantization time: {time.time() - tick:.1f}")
     return results
 
@@ -128,8 +124,8 @@ def get_inps(model, data_iterable, args, dev, nsamples=None):
 
 
 @torch.no_grad()
-def quantize_gptaq(model, dataloader, args, device):
-    print("\nStarting GPTAQ quantization ...")
+def quantize_aq(model, dataloader, args, device):
+    print("\nStarting AQ quantization ...")
 
     inps, forward_args = get_inps(model, dataloader, args, dev="cpu" if args.offload_activations else device)
     outs = torch.zeros_like(inps)
@@ -144,7 +140,6 @@ def quantize_gptaq(model, dataloader, args, device):
     layers = get_layers(model)
     for i in range(len(layers)):
         print(f"\n---------------- Layer {i} of {len(layers)} ----------------")
-        normal_outlier_count, w_count = 0, 0
         stats_payload = {}
         start_time = time.time()
 
@@ -168,13 +163,13 @@ def quantize_gptaq(model, dataloader, args, device):
         for names in sequential:
             subset = {n: all_sublayers[n] for n in names}
 
-            gptaq_handlers = {}
+            aq_handlers = {}
             for sublayer_name in subset:
-                gptaq_handlers[sublayer_name] = GPTAQUtil(subset[sublayer_name])
+                aq_handlers[sublayer_name] = AQUtil(subset[sublayer_name])
 
             def add_batch(name):
                 def tmp(_, inp, out):
-                    gptaq_handlers[name].add_batch(inp[0].data)  # noqa: F821
+                    aq_handlers[name].add_batch(inp[0].data)  # noqa: F821
 
                 return tmp
 
@@ -192,7 +187,7 @@ def quantize_gptaq(model, dataloader, args, device):
 
             for sublayer_name in subset:
                 print(f"Quantizing module {sublayer_name} of layer {i}")
-                quantized = gptaq_handlers[sublayer_name].quantize(
+                quantized = aq_handlers[sublayer_name].quantize(
                     args=args,
                     verbose=True,
                     save_quantization=False,
@@ -204,12 +199,12 @@ def quantize_gptaq(model, dataloader, args, device):
                     os.makedirs(full_path, exist_ok=True)
                     torch.save(quantized.state_dict(), full_path + sublayer_name)
 
-                gptaq_handlers[sublayer_name].layer.weight.data = _reconstruct_weight(
-                    quantized.codes, quantized.codebooks
-                ).to(gptaq_handlers[sublayer_name].layer.weight.data.dtype)
+                with torch.no_grad():
+                    aq_handlers[sublayer_name].layer.weight.data = quantized().to(
+                        aq_handlers[sublayer_name].layer.weight.data.dtype)
                 overall_bits += torch.numel(quantized.codes) * args.nbits_per_codebook + torch.numel(
                     quantized.codebooks) * 16
-                model_number_of_params += torch.numel(gptaq_handlers[sublayer_name].layer.weight.data)
+                model_number_of_params += torch.numel(aq_handlers[sublayer_name].layer.weight.data)
                 print("curent_avg_bits", overall_bits/model_number_of_params)
                 quantizers["model.layers.%d.%s" % (i, sublayer_name)] = ()  # to be updated
 
@@ -234,7 +229,7 @@ def quantize_gptaq(model, dataloader, args, device):
 
         layers[i] = layer.to(layer_dev_original)
         del layer
-        del gptaq_handlers
+        del aq_handlers
         torch.cuda.empty_cache()
 
         inps, outs = outs, inps
@@ -259,7 +254,6 @@ def quantize_gptaq(model, dataloader, args, device):
             name: param for name, param in model.named_parameters() if param not in already_saved_weights
         }
         torch.save(not_quantized_weights, save + "/not_quantized_weights.pt")
-
 
     if args.wandb:
         wandb.log({"max_cuda_mem_quantize": round(torch.cuda.max_memory_allocated() / 1e9, 2)})
@@ -381,7 +375,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-5,
+        default=1e-4,
         help="relative threshold for     outliers; higher threshold = more outliers.",
     )
     parser.add_argument(
