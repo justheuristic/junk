@@ -17,6 +17,7 @@ from src.modelutils import (
     get_model_head,
     get_sequential_groups,
 )
+from src.utils import calc_avg_bits
 
 try:
     import wandb
@@ -202,8 +203,15 @@ def quantize_aq(model, dataloader, args, device):
                 with torch.no_grad():
                     aq_handlers[sublayer_name].layer.weight.data = quantized().to(
                         aq_handlers[sublayer_name].layer.weight.data.dtype)
-                overall_bits += torch.numel(quantized.codes) * args.nbits_per_codebook + torch.numel(
-                    quantized.codebooks) * 16
+
+                weight_avg_bits = calc_avg_bits(
+                    num_codebooks=quantized.num_codebooks, nbits_per_codebook=quantized.nbits_per_codebook,
+                    out_group_size=quantized.out_group_size, in_group_size=quantized.in_group_size,
+                    in_features=aq_handlers[sublayer_name].layer.in_features,
+                    out_features=aq_handlers[sublayer_name].layer.out_features,
+                    scale_nbits=quantized.scale_nbits
+                    )
+                overall_bits += int(weight_avg_bits * torch.numel(aq_handlers[sublayer_name].layer.weight.data))
                 model_number_of_params += torch.numel(aq_handlers[sublayer_name].layer.weight.data)
                 print("curent_avg_bits", overall_bits/model_number_of_params)
                 quantizers["model.layers.%d.%s" % (i, sublayer_name)] = ()  # to be updated
@@ -373,10 +381,16 @@ if __name__ == "__main__":
         help="Number of epochs.",
     )
     parser.add_argument(
+        "--init_max_iter",
+        type=int,
+        default=50,
+        help="Number of iterations used for k-means initializer",
+    )
+    parser.add_argument(
         "--lr",
         type=float,
         default=1e-4,
-        help="learning rate for codebook Adam",
+        help="learning rate for Adam optimizer",
     )
     parser.add_argument(
         "--num_codebooks",
@@ -407,6 +421,14 @@ if __name__ == "__main__":
         type=int,
         default=16,
         help="each codebook will contain 2 ** nbits_per_codebook vectors",
+    )
+    parser.add_argument(
+        "--scale_nbits",
+        type=int,
+        default=0,
+        help="Number of bits dedicated to the learnable group-wise scale. 0 means do not use group-wise scales "
+             "(still has row-wise scales), 1-15 means using per-group scales quantized to this many bits, "
+             "16+ means use per-group scales but do not quantize them"
     )
     parser.add_argument(
         "--beam_search_epochs",

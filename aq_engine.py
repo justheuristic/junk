@@ -42,15 +42,13 @@ class AQUtil:
         """
         reference_weight = self.layer.weight.detach().cuda().float()
         quantized_weight = QuantizedWeight(
-            weight_shape=reference_weight.shape,
-            num_codebooks=args.num_codebooks,
-            nbits_per_codebook=args.nbits_per_codebook,
+            reference_weight,
             out_group_size=args.out_group_size,
             in_group_size=args.in_group_size,
-            device=self.dev,
-            init_kmeans=args.kmeans_init,
-            reference_weight=reference_weight,
-            alpha=args.alpha,
+            num_codebooks=args.num_codebooks,
+            nbits_per_codebook=args.nbits_per_codebook,
+            scale_nbits=args.scale_nbits,
+            max_iter=args.init_max_iter,
             verbose=True,
         )
 
@@ -65,9 +63,6 @@ class AQUtil:
             if epoch % args.print_frequency == 0 and verbose:
                 print(f"loss={loss.item():.10f}\t")
             if (epoch + 1) % args.beam_search_epochs == 0:
-                if (epoch + 1) % args.big_beam_search_epochs == 0 and verbose:
-                    print("BIG beam search")
-
                 quantized_weight.requantize_(
                     XTX=self.H, reference_weight=reference_weight, beam_size=args.beam_size,
                     sparsity_regularizer=args.sparsity_regularizer, dim_rng=random.Random(), verbose=True)
