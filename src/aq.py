@@ -277,6 +277,18 @@ def _beam_search_squared_errors(
     :return: tuple(Tensor, Tensor) of 3d tensor of shape = [beam_size, k_best, num_out_groups].
         First one is float tensor of losses of k_best lowest square errors for each beam and out_group
         Second one is int64 tensor of indices of k_best lowest square errors for each beam and out_group
+
+    :note: The code computes MSE using the square-of-difference expansion
+     ||X@W.T - sum_i X@(Bi@Ci).T||^2 = ||X@W.T||^2 - 2 <X@W.T, sum_i X@(Bi@Ci).T> + ||sum_i X@Bi@Ci||^2
+    where X[nsamples,in_features] is calibration data, W[out_features, in_features] is the reference weight,
+       C[num_codebooks, codebook_size, in_features] are learned codebooks (Ci has shape [codebook_size, out_features])
+       B[num_codebooks, out_features, codebook_size] are one-hot encoded indices (quantization codes)
+    The formula above uses a single group per output "neuron" and a single group.
+    The algorithm below generalizes the formula for multiple groups and codebooks.
+
+    Furthermore, the algorithm does not compute the entire formula. Instead, it begins from some baseline loss
+    and computes the change in loss from changing a single code to every possible altearnative code.
+    When computing the changed loss, the algorithm only computes the few affected parts of the loss formula above.
     """
     num_codebooks, codebook_size, out_group_size, in_group_size = codebooks.shape
     beam_size, num_out_groups, num_in_groups, num_codebooks = beam_codes.shape
@@ -301,8 +313,6 @@ def _beam_search_squared_errors(
 
     cand_weights = codebooks[codebook_index]  # [codebook_size, out_group_size, in_group_size], all replacement codes
 
-    # Step 1: compute flat dot products between X @ (W_original - W_quantized_without_replaced_codes) and
-    # ... and (X @ Ci) where Ci are all possible replacement codes
     delta_weight_without_part = reference_weight - beam_weights
     delta_weight_without_part[:, :, input_group_slice] += prev_weight_part
 
@@ -325,7 +335,6 @@ def _beam_search_squared_errors(
         (beam_size, k_best, num_out_groups), dtype=torch.int64, device=XTX.device,
     )
     for beam_id in range(beam_size):
-        # step 2: compute pairwise dot products for mse
         delta_weights_i = torch.sub(
             cand_weights[:, None, :, :],  # note: if scale exists, we scale **after** subtracting (next statement)
             prev_part_dequantized.view(beam_size, 1, num_out_groups, out_group_size, in_group_size)[beam_id]
@@ -333,12 +342,18 @@ def _beam_search_squared_errors(
         if scales is not None:
             delta_weights_i = delta_weights_i.mul(scales_part)
 
-        dot_products = torch.matmul(
-            dWTXTXg.view(beam_size, 1, num_out_groups, 1, out_group_size * in_group_size)[beam_id],
-            delta_weights_i.view(codebook_size, num_out_groups, out_group_size * in_group_size, 1),
-        ).reshape(codebook_size, num_out_groups)
+        if out_group_size * in_group_size >= 128:
+            dot_products = torch.matmul(
+                dWTXTXg.view(beam_size, 1, num_out_groups, 1, out_group_size * in_group_size)[beam_id],
+                delta_weights_i.view(codebook_size, num_out_groups, out_group_size * in_group_size, 1),
+            ).reshape(codebook_size, num_out_groups)
+        else:  # equivalent computation, but tested to be faster on GPU
+            dot_products = torch.einsum(
+                'mog,og->mo',
+                delta_weights_i.view(codebook_size, num_out_groups, out_group_size * in_group_size),
+                dWTXTXg[beam_id].view(num_out_groups, out_group_size * in_group_size)
+            )  # [codebook_size, num_out_groups]
 
-        # step 3: compute squared old code norms
         XoldBkC_norms_sq = torch.bmm(
             (prev_weight_part[beam_id] @ XTX[input_group_slice, input_group_slice]).view(
                 num_out_groups, 1, out_group_size * in_group_size),
