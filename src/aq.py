@@ -476,6 +476,7 @@ def init_aq_kmeans(reference_weight: torch.Tensor, *,
                                                                            gpu=(weight_residue.device.type != 'cpu'),
                                                                            max_points_per_centroid=max_points_per_centroid)
         elif max_points_per_centroid * codebook_size < weight_residue.shape[0]:
+            print("Clustering: ",max_points_per_centroid * codebook_size, "points from ", weight_residue.shape[0])
             codebook_i, _, _ = fit_kmeans(
                 weight_residue[torch.randperm(weight_residue.shape[0])[:max_points_per_centroid * codebook_size], :],
                 k=codebook_size, **kwargs)
