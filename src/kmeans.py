@@ -138,6 +138,7 @@ def find_nearest_cluster(data, clusters, block_size_vals: int = 2 ** 30, devices
             for gi in range(len(devices))]
     nearest_indices = [torch.empty(len(data[gi]), dtype=torch.int64, device=devices[gi])
                        for gi in range(len(devices))]
+    clusters = [clusters.to(device, non_blocking=True) for device in devices]
 
     for block_start in range(0, shard_size, block_size):
         for gi in range(len(devices)):
