@@ -128,7 +128,7 @@ def fit_faiss_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, gpu: bool
 
 
 @maybe_script
-def find_nearest_cluster(data, clusters, block_size_vals: int = 2 ** 30, devices=None):
+def find_nearest_cluster(data, clusters, block_size_vals: int = 2 ** 30, devices: Optional[List[torch.device]] = None):
     """Find nearest clusters for each batch of data and return their indices"""
     if devices is None:
         devices = [data.device]
