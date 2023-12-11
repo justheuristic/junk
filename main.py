@@ -382,7 +382,7 @@ if __name__ == "__main__":
         help="Number of epochs.",
     )
     parser.add_argument(
-        " --model_seqlen",
+        "--model_seqlen",
         type=int,
         default=4096,
         choices=[2048, 4096],
