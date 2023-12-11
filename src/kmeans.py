@@ -146,6 +146,7 @@ def find_nearest_cluster(data, clusters, block_size_vals: int = 2 ** 30, devices
                 torch.bmm(clusters[gi][:, None, :], clusters[gi][:, :, None]).flatten(),
                 data[gi][block_start: block_start + block_size], clusters[gi].T, beta=-0.5
             ).argmax(1)
+    clusters = clusters[0]
     nearest_indices = torch.cat([nearest_indices[gi].to(devices[0]) for gi in range(len(devices))], dim=0)
     reconstructed_data = clusters[nearest_indices]
     return nearest_indices, reconstructed_data
