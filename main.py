@@ -517,7 +517,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if args.devices is None:
-        devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
+        args.devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
 
     print("\n============ Load model... ============")
     model = get_model(args.model_path, args.load, args.dtype, args.model_seqlen).train(False)
