@@ -452,11 +452,28 @@ if __name__ == "__main__":
         help="An (optional) regularizer that promotes sparsity. Subtracted from loss for each zero code (index)",
     )
     parser.add_argument(
+        "--use_faiss",
+        action="store_true",
+        help="Whether to use faiss when initializing codebooks by kmeans.",
+    )
+    parser.add_argument(
+        "--max_point_per_centorid",
+        type=int,
+        default=10**9,
+        help="Maximum data point per cluster in Kmeans",
+    )
+    parser.add_argument(
         "--print_frequency",
         type=int,
         default=10,
         help="Print Adam progress after each print_frequency updates",
     )
+    parser.add_argument('--devices',
+                        metavar='N',
+                        type=str,
+                        nargs='+',
+                        default=None,
+                        help='List of devices')
     parser.add_argument(
         "--dtype",
         type=str,
@@ -497,6 +514,9 @@ if __name__ == "__main__":
     torch.backends.cuda.matmul.allow_tf32 = False
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if args.devices is None:
+        devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
 
     print("\n============ Load model... ============")
     model = get_model(args.model_path, args.load, args.dtype, args.model_seqlen).train(False)

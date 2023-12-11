@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm.auto import trange
 
-from src.kmeans import fit_kmeans, fit_kmeans_1d
+from src.kmeans import fit_kmeans, fit_kmeans_1d, fit_faiss_kmeans, find_nearest_cluster
 from src.utils import maybe_script
 
 
@@ -451,10 +451,12 @@ def _channelwise_squared_error(XTX: torch.Tensor, weight: torch.Tensor, referenc
 @torch.no_grad()
 def init_aq_kmeans(reference_weight: torch.Tensor, *,
                    num_codebooks: int, out_group_size: int, in_group_size: int, codebook_size: int,
-                   verbose: bool = False, **kwargs):
+                   verbose: bool = False, use_faiss: bool = False, max_point_per_centorid: int=10**9, **kwargs):
     """
     Create initial codes and codebooks using residual K-means clustering of weights
     :params reference_weight, num_codebooks, out_group_size, in_group_size, nbits, verbose: same as in QuantizedWeight
+    :params use_faiss  whether to use faiss implementation of kmeans or pure torch
+    :params max_point_per_centorid maximum data point per cluster
     :param kwargs: any additional params are forwarded to fit_kmeans
     """
     out_features, in_features = reference_weight.shape
@@ -467,7 +469,16 @@ def init_aq_kmeans(reference_weight: torch.Tensor, *,
     codes = []
 
     for _ in trange(num_codebooks, desc='initializing with kmeans') if verbose else range(num_codebooks):
-        codebook_i, codes_i, reconstructed_weight_i = fit_kmeans(weight_residue, k=codebook_size, **kwargs)
+        if use_faiss:
+            codebook_i, codes_i, reconstructed_weight_i = fit_faiss_kmeans(weight_residue, k=codebook_size, **kwargs)
+        elif max_point_per_centorid * codebook_size < weight_residue.shape[0]:
+            codebook_i, _, _ = fit_kmeans(
+                weight_residue[torch.randperm(weight_residue.shape[0])[:max_point_per_centorid * codebook_size], :],
+                k=codebook_size, **kwargs)
+            codes_i, reconstructed_weight_i = find_nearest_cluster(weight_residue, codebook_i, **kwargs)
+        else:
+            codebook_i, codes_i, reconstructed_weight_i = fit_kmeans(weight_residue, k=codebook_size, **kwargs)
+
         codes_i = codes_i.reshape(num_out_groups, num_in_groups, 1)
         codebook_i = codebook_i.reshape(1, codebook_size, out_group_size, in_group_size)
         weight_residue -= reconstructed_weight_i
