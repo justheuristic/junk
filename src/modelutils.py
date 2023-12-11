@@ -24,10 +24,10 @@ def suspend_nn_inits():
         torch.nn.init.kaiming_uniform_, torch.nn.init.uniform_, torch.nn.init.normal_ = saved_inits  # restoring
 
 
-def get_model(model_path, load_quantized=None, dtype="auto"):
+def get_model(model_path, load_quantized=None, dtype="auto", model_seqlen=2048):
     if dtype == "auto":
         dtype = (
-            AutoConfig.from_pretrained(model_path, trust_remote_code=True).torch_dtype or "auto"
+                AutoConfig.from_pretrained(model_path, trust_remote_code=True).torch_dtype or "auto"
         )  # force transformers 4.29.2 to follow the same rules as 4.30.x
     else:
         dtype = getattr(torch, dtype)
@@ -49,7 +49,7 @@ def get_model(model_path, load_quantized=None, dtype="auto"):
                 local_files_only=True,
             )
     # Please verify correcttess #TODO
-    model.seqlen = 2048
+    model.seqlen = model_seqlen
 
     print("Model loaded sucessfully ...")
 
@@ -149,6 +149,7 @@ def get_sequential_groups(model):
 
 def read_quant_weight_from_file(load_path, block_i, layer_name):
     return torch.load(load_path + "/" + str(block_i) + "/" + layer_name)
+
 
 def load_quantized_model(model, load_path):
     layers = get_layers(model)

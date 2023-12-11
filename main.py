@@ -210,10 +210,10 @@ def quantize_aq(model, dataloader, args, device):
                     in_features=aq_handlers[sublayer_name].layer.in_features,
                     out_features=aq_handlers[sublayer_name].layer.out_features,
                     scale_nbits=quantized.scale_nbits
-                    )
+                )
                 overall_bits += int(weight_avg_bits * torch.numel(aq_handlers[sublayer_name].layer.weight.data))
                 model_number_of_params += torch.numel(aq_handlers[sublayer_name].layer.weight.data)
-                print("curent_avg_bits", overall_bits/model_number_of_params)
+                print("curent_avg_bits", overall_bits / model_number_of_params)
                 quantizers["model.layers.%d.%s" % (i, sublayer_name)] = ()  # to be updated
 
         out_losses = []
@@ -247,8 +247,8 @@ def quantize_aq(model, dataloader, args, device):
         stats_payload["out_loss"] = torch.mean(torch.Tensor(out_losses)).item()
         stats_payload["Step"] = i
         if args.wandb:
-            wandb.log({"out_loss": stats_payload["out_loss"]},step = i)
-            wandb.log({"layer_time": stats_payload["layer_time"]},step = i)
+            wandb.log({"out_loss": stats_payload["out_loss"]}, step=i)
+            wandb.log({"layer_time": stats_payload["layer_time"]}, step=i)
         print(stats_payload)
 
     print("=====================\nFinal stats:")
@@ -265,7 +265,7 @@ def quantize_aq(model, dataloader, args, device):
 
     if args.wandb:
         wandb.log({"max_cuda_mem_quantize": round(torch.cuda.max_memory_allocated() / 1e9, 2)})
-        wandb.log({"Avg_bits": overall_bits/model_number_of_params})
+        wandb.log({"Avg_bits": overall_bits / model_number_of_params})
     model.config.use_cache = use_cache
     print(f"quantize: {torch.cuda.max_memory_allocated()=:,}")
     return quantizers
@@ -353,7 +353,8 @@ if __name__ == "__main__":
     parser.add_argument("--load", type=str, default=None, help="Path to load quantized statistics.")
     parser.add_argument("--save", type=str, default=False, help="Path to save quantized statistics.")
     parser.add_argument("--seed", type=int, default=0, help="Seed for sampling the calibration data.")
-    parser.add_argument("--nsamples", type=int, default=128, help="Number of calibration data samples.")
+    parser.add_argument("--nsamples", type=int, default=None,
+                        help="Number of calibration data samples.If None take all calibration data.")
     parser.add_argument(
         "--skip_out_loss",
         action="store_true",
@@ -379,6 +380,13 @@ if __name__ == "__main__":
         type=int,
         default=500,
         help="Number of epochs.",
+    )
+    parser.add_argument(
+        " --model_seqlen",
+        type=int,
+        default=4096,
+        choices=[2048, 4096],
+        help="Model seqlen and calibration data context length.",
     )
     parser.add_argument(
         "--init_max_iter",
@@ -422,6 +430,7 @@ if __name__ == "__main__":
         default=16,
         help="each codebook will contain 2 ** nbits_per_codebook vectors",
     )
+
     parser.add_argument(
         "--scale_nbits",
         type=int,
@@ -490,7 +499,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print("\n============ Load model... ============")
-    model = get_model(args.model_path, args.load, args.dtype).train(False)
+    model = get_model(args.model_path, args.load, args.dtype, args.model_seqlen).train(False)
 
     print("\n============ Quantizing model... ============")
     quantize_model(model, args, device)

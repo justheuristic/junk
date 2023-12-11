@@ -174,7 +174,7 @@ def get_loaders(name, nsamples=128, seed=0, seqlen=2048, eval_mode=False, model_
 
     # for pre-tokenized datasets
     if name.lower() == "pajama":
-        data = torch.load("./data/red_pajama_n=1024.pth")[:nsamples]
+        data = torch.load(f"./data/red_pajama_n=1024_{seqlen}_context_length.pth")[:nsamples]
     elif name.lower() == "refinedweb":
         data = torch.load("./data/refined_web_n=128.pth")[:nsamples]
     elif name.lower() == "none":
