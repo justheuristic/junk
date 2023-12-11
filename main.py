@@ -457,7 +457,7 @@ if __name__ == "__main__":
         help="Whether to use faiss when initializing codebooks by kmeans.",
     )
     parser.add_argument(
-        "--max_point_per_centorid",
+        "--max_points_per_centroid",
         type=int,
         default=10**9,
         help="Maximum data point per cluster in Kmeans",
@@ -468,7 +468,8 @@ if __name__ == "__main__":
         default=10,
         help="Print Adam progress after each print_frequency updates",
     )
-    parser.add_argument('--devices',
+    parser.add_argument(
+        '--devices',
                         metavar='N',
                         type=str,
                         nargs='+',
