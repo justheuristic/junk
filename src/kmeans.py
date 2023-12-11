@@ -1,6 +1,5 @@
 import itertools
-from typing import Optional, Tuple
-
+from typing import Optional, List, Tuple
 import torch
 
 from src.utils import maybe_script
@@ -23,7 +22,8 @@ def _kmeans_greedy_init(data: torch.Tensor, k: int) -> torch.Tensor:
 
 @maybe_script
 def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: int = 10,
-               rtol: float = 1e-06, atol: float = 1e-08, greedy_init: bool = False, block_size_vals: int = 2 ** 30):
+               rtol: float = 1e-06, atol: float = 1e-08, greedy_init: bool = False,
+               block_size_vals: int = 2 ** 30, devices: Optional[List[torch.device]] = None):
     """
     :param data: [nsamples, dim]
     :param k: number of centroids
@@ -34,50 +34,127 @@ def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: in
     :param greedy_init: if True, init by greedily selecting the point that is farthest from any cluster
         if False (default), initialize with random points using pytorch global RNG
     :param block_size_vals: how many dot products to compute at a time
+    :param devices: if specified, run kmeans in data-parallel mode across these devices
     :return: (clusters float[k, dim], data_indices int[nsamples], reconstructed_data: float[nsamples, dim])
     """
+    if devices is None:
+        devices = [data.device]
+
     if greedy_init:
         clusters = _kmeans_greedy_init(data, k)
     else:
         clusters = data[torch.randperm(data.shape[0])[:k], :]  # [k, dim]
 
-    nearest_indices = torch.empty(len(data), dtype=torch.int64, device=data.device)
     block_size = block_size_vals // k
-    for i in range(max_iter):
-        for block_start in range(0, len(data), block_size):
-            nearest_indices[block_start: block_start + block_size] = torch.addmm(
-                torch.bmm(clusters[:, None, :], clusters[:, :, None]).flatten(),
-                data[block_start: block_start + block_size], clusters.T, beta=-0.5
-            ).argmax(1)
-        # note: the above formula equals to - 0.5 || data[:, None, :] - clusters[None, :, :] || ^ 2 + const
+    shard_size = (len(data) - 1) // len(devices) + 1
+    data = [data[gi * shard_size: (gi + 1) * shard_size].to(devices[gi], non_blocking=True)
+            for gi in range(len(devices))]
+    nearest_indices = [torch.empty(len(data[gi]), dtype=torch.int64, device=devices[gi])
+                       for gi in range(len(devices))]
+    clusters = [clusters.to(device, non_blocking=True) for device in devices]
 
-        new_clusters = torch.zeros_like(clusters).index_reduce_(
-            dim=0, index=nearest_indices, source=data, reduce='mean', include_self=False)
+    for i in range(max_iter):
+        for block_start in range(0, shard_size, block_size):
+            for gi in range(len(devices)):
+                nearest_indices[gi][block_start: block_start + block_size] = torch.addmm(
+                    torch.bmm(clusters[gi][:, None, :], clusters[gi][:, :, None]).flatten(),
+                    data[gi][block_start: block_start + block_size], clusters[gi].T, beta=-0.5
+                ).argmax(1)
+            # note: the above formula equals to - 0.5 || data[:, None, :] - clusters[None, :, :] || ^ 2 + const
+
+        if len(devices) == 1:
+            new_clusters = [torch.zeros_like(clusters[0]).index_reduce_(
+                dim=0, index=nearest_indices[0], source=data[0], reduce='mean', include_self=False)]
+        else:
+            cluster_sums = [torch.zeros_like(clusters[gi]).index_add(
+                dim=0, index=nearest_indices[gi], source=data[gi]
+            ).to(devices[0], non_blocking=True) for gi in range(len(devices))]
+            cluster_counts = [torch.bincount(nearest_indices[gi], minlength=k).to(
+                devices[0], non_blocking=True) for gi in range(len(devices))]
+            for gi in range(1, len(devices)):
+                cluster_sums[0] += cluster_sums[gi]
+                cluster_counts[0] += cluster_counts[gi]
+
+            new_clusters = [cluster_sums[0] / cluster_counts[0].unsqueeze(1)]
+            for gi in range(1, len(devices)):
+                new_clusters.append(new_clusters[0].to(devices[gi], non_blocking=True))
 
         if i % check_every == 0:
-            if torch.allclose(new_clusters, clusters, rtol=rtol, atol=atol):
+            if torch.allclose(new_clusters[0], clusters[0], rtol=rtol, atol=atol):
                 break
         clusters = new_clusters
-    for block_start in range(0, len(data), block_size):
-        nearest_indices[block_start: block_start + block_size] = torch.addmm(
-            torch.bmm(clusters[:, None, :], clusters[:, :, None]).flatten(),
-            data[block_start: block_start + block_size], clusters.T, beta=-0.5
-        ).argmax(1)
+    for block_start in range(0, shard_size, block_size):
+        for gi in range(len(devices)):
+            nearest_indices[gi][block_start: block_start + block_size] = torch.addmm(
+                torch.bmm(clusters[gi][:, None, :], clusters[gi][:, :, None]).flatten(),
+                data[gi][block_start: block_start + block_size], clusters[gi].T, beta=-0.5
+            ).argmax(1)
+
+    clusters = clusters[0]
+    nearest_indices = torch.cat([nearest_indices[gi].to(devices[0]) for gi in range(len(devices))], dim=0)
     reconstructed_data = clusters[nearest_indices]
     return clusters, nearest_indices, reconstructed_data
 
 
+def fit_faiss_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, gpu: bool = True, verbose: bool = True,
+                     max_points_per_centroid=None):
+    """
+    :param data: [nsamples, dim]
+    :param k: number of centroids
+    :param max_iter: run at most this many iterations
+    :param gpu: Use gpu or not
+
+    :return: (clusters float[k, dim], data_indices int[nsamples], reconstructed_data: float[nsamples, dim])
+    """
+    try:
+        import faiss
+    except ModuleNotFoundError:
+        assert "Faiss is not installed. Please install it before running this function."
+
+    d = data.shape[1]
+    if max_points_per_centroid:
+        kmeans = faiss.Kmeans(d, k, niter=max_iter, verbose=verbose, gpu=gpu,
+                              max_points_per_centroid=max_points_per_centroid)
+    else:
+        kmeans = faiss.Kmeans(d, k, niter=max_iter, verbose=verbose, gpu=gpu)
+    kmeans.train(data.cpu())
+    clusters = kmeans.centroids
+    nearest_indices = kmeans.index.search(data.cpu(), 1)[1][:, 0]
+    clusters, nearest_indices = torch.from_numpy(clusters).to(data.device), torch.from_numpy(nearest_indices).to(
+        data.device)
+    reconstructed_data = clusters[nearest_indices]
+
+    return clusters, nearest_indices, reconstructed_data
+
+
 @maybe_script
-def find_nearest_cluster(data, clusters):
+def find_nearest_cluster(data, clusters, block_size_vals: int = 2 ** 30, devices: Optional[List[torch.device]] = None):
     """Find nearest clusters for each batch of data and return their indices"""
-    return torch.addmm(
-        torch.bmm(clusters[:, None, :], clusters[:, :, None]).flatten(), data, clusters.T, beta=-0.5
-    ).argmax(1)
+    if devices is None:
+        devices = [data.device]
+    block_size = block_size_vals // len(clusters)
+    shard_size = (len(data) - 1) // len(devices) + 1
+    data = [data[gi * shard_size: (gi + 1) * shard_size].to(devices[gi], non_blocking=True)
+            for gi in range(len(devices))]
+    nearest_indices = [torch.empty(len(data[gi]), dtype=torch.int64, device=devices[gi])
+                       for gi in range(len(devices))]
+    clusters = [clusters.to(device, non_blocking=True) for device in devices]
+
+    for block_start in range(0, shard_size, block_size):
+        for gi in range(len(devices)):
+            nearest_indices[gi][block_start: block_start + block_size] = torch.addmm(
+                torch.bmm(clusters[gi][:, None, :], clusters[gi][:, :, None]).flatten(),
+                data[gi][block_start: block_start + block_size], clusters[gi].T, beta=-0.5
+            ).argmax(1)
+    clusters = clusters[0]
+    nearest_indices = torch.cat([nearest_indices[gi].to(devices[0]) for gi in range(len(devices))], dim=0)
+    reconstructed_data = clusters[nearest_indices]
+    return nearest_indices, reconstructed_data
 
 
 def fit_kmeans_1d(
-    groupwise_data: torch.Tensor, k: int, max_iter: int = -1, offset_rate: float = 0, verbose: bool = False,
-    initial_clusters: Optional[torch.Tensor] = None, **kwargs
+        groupwise_data: torch.Tensor, k: int, max_iter: int = -1, offset_rate: float = 0, verbose: bool = False,
+        initial_clusters: Optional[torch.Tensor] = None, **kwargs
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     optimized batch k-means for 1d datapoint using sort
