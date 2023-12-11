@@ -480,10 +480,10 @@ def init_aq_kmeans(reference_weight: torch.Tensor, *,
                 weight_residue[torch.randperm(weight_residue.shape[0])[:max_points_per_centroid * codebook_size], :],
                 k=codebook_size, **kwargs)
             codes_i, reconstructed_weight_i = find_nearest_cluster(weight_residue, codebook_i, max_iter=max_iter,
-                                                                   devices=devices, **kwargs)
+                                                                   devices=devices)
         else:
             codebook_i, codes_i, reconstructed_weight_i = fit_kmeans(weight_residue, k=codebook_size, max_iter=max_iter,
-                                                                     devices=devices, **kwargs)
+                                                                     devices=devices)
 
         codes_i = codes_i.reshape(num_out_groups, num_in_groups, 1)
         codebook_i = codebook_i.reshape(1, codebook_size, out_group_size, in_group_size)
