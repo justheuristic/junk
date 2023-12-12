@@ -8,16 +8,18 @@ from src.aq import QuantizedWeight
 
 
 class AQUtil:
-    """Learns GPTQ for a single linear layer"""
+    """A wrapper class that runs AQ for a single linear layer; The class stores """
 
     def __init__(self, layer):
         self.layer = layer
         self.dev = layer.weight.device
         self.columns = self.layer.weight.data.shape[1]
         self.H = torch.zeros((self.columns, self.columns), device=self.dev)
+        self.quantized_weight = None
         self.nsamples = 0
 
-    def add_batch(self, inp):
+    def add_batch(self, inp: torch.Tensor):
+        """Accumulate a minibatch of layer inputs and update the hessian (XTX)"""
         assert self.H is not None, "Already ran quantization; cannot add more data batches"
         if len(inp.shape) == 2:
             inp = inp.unsqueeze(0)
@@ -38,7 +40,7 @@ class AQUtil:
         verbose=True,
         args,
     ) -> QuantizedWeight:
-        """ create a QuantizedWeight based on the collected XTX data"""
+        """ create a QuantizedWeight based on the collected hessian (XTX) data"""
         reference_weight = self.layer.weight.detach().cuda().float()
         quantized_weight = QuantizedWeight.create_with_init_params(
             reference_weight=reference_weight,
@@ -58,8 +60,7 @@ class AQUtil:
         opt = torch.optim.Adam(quantized_weight.parameters(), lr=args.lr, betas=(0.0, 0.95), amsgrad=True)
 
         for epoch in trange(args.num_epochs):
-            delta_weight = (quantized_weight() - reference_weight).double()
-            loss = (delta_weight @ self.H.double()).flatten() @ delta_weight.flatten() / len(delta_weight)
+            loss = quantized_weight.compute_mse(self.H.double(), reference_weight)
             opt.zero_grad()
             loss.backward()
             opt.step()

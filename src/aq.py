@@ -16,6 +16,7 @@ class QuantizedWeight(nn.Module):
 
     @classmethod
     def create_with_init_params(cls, *args, **kwargs):
+        """Create normally, then save all params passed to init for future serialization"""
         module = cls(*args, **kwargs)
         module.init_params = args, kwargs
         return module
@@ -85,6 +86,15 @@ class QuantizedWeight(nn.Module):
 
     def forward(self):
         return _reconstruct_weight(self.codes, self.get_codebooks(), self.get_scales())
+
+    def compute_mse(self, XTX: torch.Tensor, reference_weight: torch.Tensor):
+        """
+        Compute activation MSE error: ||X @ quantized_weight - X @ reference_weight||^2 via square-of-difference
+        :param XTX: activations transposed times activations, shape: [in_features, in_features]
+        :param reference_weight: original weight to be approximated, [out_features, in_features]
+        """
+        delta_weight = (self() - reference_weight).to(XTX.dtype)
+        return (delta_weight @ XTX).flatten() @ delta_weight.flatten() / len(delta_weight)
 
     def get_codebooks(self):
         if self.codebook_value_nbits >= 16:
