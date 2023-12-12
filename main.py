@@ -521,9 +521,10 @@ if __name__ == "__main__":
 
     print("\n============ Load model... ============")
     model = get_model(args.model_path, args.load, args.dtype, args.model_seqlen).train(False)
-
-    print("\n============ Quantizing model... ============")
-    quantize_model(model, args, device)
+    
+    if not args.load:
+        print("\n============ Quantizing model... ============")
+        quantize_model(model, args, device)
 
     print("\n============ Evaluating perplexity... ============")
     torch.cuda.reset_peak_memory_stats()
