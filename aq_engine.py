@@ -38,8 +38,7 @@ class AQUtil:
         verbose=True,
         args,
     ) -> QuantizedWeight:
-        """
-        """
+        """ create a QuantizedWeight based on the collected XTX data"""
         reference_weight = self.layer.weight.detach().cuda().float()
         quantized_weight = QuantizedWeight.create_with_init_params(
             reference_weight=reference_weight,
@@ -47,6 +46,8 @@ class AQUtil:
             in_group_size=args.in_group_size,
             num_codebooks=args.num_codebooks,
             nbits_per_codebook=args.nbits_per_codebook,
+            codebook_value_nbits=args.codebook_value_nbits,
+            codebook_value_num_groups=args.codebook_value_num_groups,
             scale_nbits=args.scale_nbits,
             max_iter=args.init_max_iter,
             max_points_per_centroid=args.max_points_per_centroid,

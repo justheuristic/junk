@@ -1,39 +1,7 @@
 import functools
 import os
-
-import huffman
 import torch
 
-
-def calc_avg_bits(
-    num_codebooks: int = 8,
-    out_group_size: int = 1,
-    in_group_size: int = 32,
-    nbits_per_codebook: int = 8,
-    in_features: int = 8192,
-    out_features: int = 8192,
-    scale_nbits: int = 0
-):
-    '''
-    Calculates average bits for parameters in one layer.
-    :param num_codebooks: codebook quantity
-    :param out_group_size: size of groupes in out dimension
-    :param in_group_size: size of groupes in in dimension
-    :param nbits_per_codebook: number of bits for codebook
-    :param in_features: shape of input dimension of layer
-    :param out_features: shape of output dimension of layer
-    :param scale_nbits: number of bits to store a per-group scale factor
-    
-    '''
-    codebook_size = 2 ** nbits_per_codebook  # codebook size
-    codebooks_store = num_codebooks * codebook_size * out_group_size * in_group_size * 16  # bits
-    matrix_store = (
-        out_features * in_features // (out_group_size * in_group_size) * num_codebooks * nbits_per_codebook
-    )  # bits
-    scale_store = scale_nbits * (out_features // out_group_size) * (in_features // in_group_size)
-    if 0 < scale_nbits < 16 and 2 ** scale_nbits < (in_features // in_group_size):
-        scale_store += (out_features // out_group_size) * 2 ** scale_nbits * 16  # scale quantization codebooks
-    return (matrix_store + codebooks_store + scale_store) / (in_features * out_features)
 
 def get_mean_nbits_by_codebook(codes: torch.IntTensor, huffman_group_size: int = 2):
 
@@ -42,6 +10,7 @@ def get_mean_nbits_by_codebook(codes: torch.IntTensor, huffman_group_size: int =
     :param codes: codebook codes
     :param huffman_group_size: huffman compresssion dimension count
     '''
+    import huffman
     _, codebook_size, num_codebooks = codes.shape
     flat_codes_by_codebook = codes.permute(2, 0, 1).flatten(1, 2)
     code_counts = torch.zeros(num_codebooks, codebook_size, device=flat_codes_by_codebook.device,

@@ -26,19 +26,24 @@ class QuantizedWeight(nn.Module):
                  out_group_size: int,
                  num_codebooks: int,
                  nbits_per_codebook: int = 8,
+                 codebook_value_nbits: int = 16,
+                 codebook_value_num_groups: int = 1,
                  scale_nbits: int = 0,
                  straight_through_gradient: Optional[bool] = None,
                  **init_kwargs
                  ):
         super().__init__()
-        out_features, in_features = reference_weight.shape
-        assert in_features % in_group_size == 0
-        assert out_features % out_group_size == 0
+        self.out_features, self.in_features = reference_weight.shape
+        assert self.in_features % in_group_size == 0
+        assert self.out_features % out_group_size == 0
 
         self.out_group_size, self.in_group_size = out_group_size, in_group_size
         self.num_codebooks = num_codebooks
         self.nbits_per_codebook = nbits_per_codebook
         self.codebook_size = codebook_size = 2 ** nbits_per_codebook
+        self.codebook_value_nbits = codebook_value_nbits
+        self.codebook_value_num_groups = codebook_value_num_groups
+        self.codebook_value_clusters = None
 
         self.scales = self.scales_clusters = self.scales_indices = None
         if straight_through_gradient is None and scale_nbits > 0:
@@ -48,8 +53,8 @@ class QuantizedWeight(nn.Module):
 
         with torch.no_grad():
             weight_groupwise = reference_weight.reshape(
-                out_features // out_group_size, out_group_size,
-                in_features // in_group_size, in_group_size
+                self.out_features // out_group_size, out_group_size,
+                self.in_features // in_group_size, in_group_size
             ).swapaxes(1, 2)  # [num_out_groups, num_in_groups, out_group_size, in_group_size]
 
             if scale_nbits > 0:
@@ -79,15 +84,39 @@ class QuantizedWeight(nn.Module):
         self.codes = nn.Parameter(codes, requires_grad=False)
 
     def forward(self):
-        return _reconstruct_weight(self.codes, self.codebooks, self.get_scales())
+        return _reconstruct_weight(self.codes, self.get_codebooks(), self.get_scales())
+
+    def get_codebooks(self):
+        if self.codebook_value_nbits >= 16:
+            return self.codebooks
+        elif 0 < self.codebook_value_nbits < 16:
+            with torch.no_grad():
+                codebooks_dimshuffle = self.codebooks.reshape(
+                    self.num_codebooks, self.codebook_value_num_groups,
+                    self.codebook_size // self.codebook_value_num_groups,
+                    self.out_group_size, self.in_group_size
+                ).permute(0, 1, 3, 4, 2).flatten(0, -2)
+                self.codebook_value_clusters, _unused, reconstructed_codebooks_dimshuffle = fit_kmeans_1d(
+                    codebooks_dimshuffle, k=2 ** self.codebook_value_nbits,
+                    initial_clusters=self.codebook_value_clusters
+                )
+                reconstructed_codebooks = reconstructed_codebooks_dimshuffle.view(
+                    self.num_codebooks, self.codebook_value_num_groups, self.out_group_size, self.in_group_size,
+                    self.codebook_size // self.codebook_value_num_groups
+                ).permute(0, 1, 4, 2, 3).reshape_as(self.codebooks)
+            if torch.is_grad_enabled():
+                reconstructed_codebooks = reconstructed_codebooks + (self.codebooks - self.codebooks.detach())
+            return reconstructed_codebooks
+        raise NotImplementedError(f"{self.codebook_value_nbits}-bit codebook values are not supported")
 
     def get_scales(self):
         if self.scale_nbits == 0 or self.scales_are_lossless:
             return self.scales  # scales are not quantized or the quantization is lossless
         elif self.straight_through_gradient:
             with torch.no_grad():
-                _, _, dequantized_scales = fit_kmeans_1d(
+                self.scales_clusters, _, dequantized_scales = fit_kmeans_1d(
                     self.scales.flatten(1, -1), k=2 ** self.scale_nbits,
+                    initial_clusters=self.scales_clusters
                 )
                 dequantized_scales = dequantized_scales.reshape_as(self.scales)
             if torch.is_grad_enabled() and self.scales.requires_grad:
@@ -107,9 +136,34 @@ class QuantizedWeight(nn.Module):
         Any additional keyword arguments are forwarded to beam_search_optimal_codes
         """
         self.codes[...] = beam_search_optimal_codes(
-            XTX=XTX, reference_weight=reference_weight, codebooks=self.codebooks, prev_codes=self.codes,
+            XTX=XTX, reference_weight=reference_weight, codebooks=self.get_codebooks(), prev_codes=self.codes,
             scales=self.get_scales(), beam_size=beam_size, **kwargs
         )
+
+    def estimate_nbits_per_parameter(self) -> float:
+        """Calculate the effective number of bits per original matrix parameters"""
+        num_parameters = self.out_features * self.in_features
+        group_size = self.out_group_size * self.in_group_size
+        num_out_groups = self.out_features // self.out_group_size
+        num_in_groups = self.in_features // self.in_group_size
+
+        matrix_store = num_parameters // group_size * self.num_codebooks * self.nbits_per_codebook
+
+        codebooks_store = self.num_codebooks * self.codebook_size * group_size * self.codebook_value_nbits
+        if self.codebook_value_nbits < 16:
+            codebooks_store += (2 ** self.codebook_value_nbits * self.num_codebooks
+                                * self.codebook_value_num_groups * group_size * 16)
+
+        if self.scale_nbits >= 16 or 2 ** self.scale_nbits >= num_in_groups:  # group-wise scales in 16 bit
+            scale_store = self.scale_nbits * num_out_groups * num_in_groups
+        elif 0 < self.scale_nbits < 16:  # use scale quantization codebooks
+            scale_store = self.scale_nbits * num_out_groups * num_in_groups
+            scale_store += num_out_groups * 2 ** self.scale_nbits * 16
+        elif self.scale_nbits == 0:  # no group-wise scales; use global 1d scales instead
+            scale_store = num_out_groups * 16
+        else:
+            assert False
+        return (matrix_store + codebooks_store + scale_store) / num_parameters
 
 
 @torch.inference_mode()

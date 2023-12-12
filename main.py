@@ -204,13 +204,7 @@ def quantize_aq(model, dataloader, args, device):
                     aq_handlers[sublayer_name].layer.weight.data = quantized().to(
                         aq_handlers[sublayer_name].layer.weight.data.dtype)
 
-                weight_avg_bits = calc_avg_bits(
-                    num_codebooks=quantized.num_codebooks, nbits_per_codebook=quantized.nbits_per_codebook,
-                    out_group_size=quantized.out_group_size, in_group_size=quantized.in_group_size,
-                    in_features=aq_handlers[sublayer_name].layer.in_features,
-                    out_features=aq_handlers[sublayer_name].layer.out_features,
-                    scale_nbits=quantized.scale_nbits
-                )
+                weight_avg_bits = quantized.estimate_nbits_per_parameter()
                 overall_bits += int(weight_avg_bits * torch.numel(aq_handlers[sublayer_name].layer.weight.data))
                 model_number_of_params += torch.numel(aq_handlers[sublayer_name].layer.weight.data)
                 print("curent_avg_bits", overall_bits / model_number_of_params)
@@ -440,6 +434,18 @@ if __name__ == "__main__":
              "16+ means use per-group scales but do not quantize them"
     )
     parser.add_argument(
+        "--codebook_value_nbits",
+        type=int,
+        default=16,
+        help="If below 16, quantize the values in each codebook with the specified number of bits"
+    )
+    parser.add_argument(
+        "--codebook_value_num_groups",
+        type=int,
+        default=1,
+        help="Split codebook vectors into this many groups for quantizations. Only used when quantized codebooks."
+    )
+    parser.add_argument(
         "--beam_search_epochs",
         type=int,
         default=100,
@@ -494,6 +500,8 @@ if __name__ == "__main__":
                 + f"_out_group_size_{args.out_group_size}"
                 + f"_in_group_size_{args.in_group_size}"
                 + f"_nbits_per_codebook_{args.nbits_per_codebook}"
+                + f"_codebook_value_nbits_{args.codebook_value_nbits}"
+                + f"_codebook_value_num_groups_{args.codebook_value_num_groups}"
                 + f"_scale_nbits_{args.scale_nbits}"
                 + f"_beam_search_epochs_{args.beam_search_epochs}"
                 + f"_init_max_iter{args.init_max_iter}"
