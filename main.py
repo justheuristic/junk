@@ -46,7 +46,7 @@ def quantize_model(model, args, device):
 @torch.no_grad()
 def get_inps(model, data_iterable, args, device, nsamples=None):
     """mocks model launch to collect inputs to the first model layer"""
-    print("catching inputs from data", flush=True)
+    print("catching layer inputs from data", flush=True)
 
     layers = get_layers(model)
 
