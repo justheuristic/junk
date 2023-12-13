@@ -92,7 +92,7 @@ class AQUtil(nn.Module):
                 loss.backward()
                 opt.step()
                 if verbose and (epoch * args.steps_per_epoch + step) % args.print_frequency == 0:
-                    print(f"epoch={epoch}\tstep={step}|loss={loss.item():.10f}\t")
+                    print(f"epoch={epoch}\tstep={step}\tloss={loss.item():.10f}\t")
 
             # search for better codes (cluster indices)
             seed = random.getrandbits(256)
