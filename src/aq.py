@@ -122,7 +122,7 @@ class QuantizedWeight(nn.Module):
         else:  # train scale codebook only
             return self.scales_clusters.gather(1, self.scales_indices)[:, :, None, None]
 
-    def forward(self, selection: Union[type(None), slice, torch.Tensor] = None):
+    def forward(self, selection: Union[slice, type(Ellipsis), torch.Tensor] = ...):
         """
         Differentably reconstruct the weight (or parts thereof) from compressed components
         :param selection: By default, reconstruct the entire weight. If selection is specified, this method will instead
@@ -131,12 +131,7 @@ class QuantizedWeight(nn.Module):
             Formally, the indices must be in range [ 0 , self.out_features // self.out_group_size )
 
         """
-        codes = self.codes
-        scales = self.get_scales()
-        codebooks = self.get_codebooks()
-        if selection is not None:
-            codes, scales = codes[selection], scales[selection]
-        return _reconstruct_weight(codes, codebooks, scales)
+        return _reconstruct_weight(self.codes, self.get_codebooks()[selection], self.get_scales()[selection])
 
     @torch.no_grad()
     def beam_search_update_codes_(

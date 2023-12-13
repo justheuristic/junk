@@ -90,7 +90,7 @@ class AQUtil:
                     sparsity_regularizer=args.sparsity_regularizer, verbose=True)
         return self.quantized_weight
 
-    def _compute_mse(self, selection: Union[slice, Ellipsis, torch.Tensor] = ...) -> torch.Tensor:
+    def _compute_mse(self, selection: Union[slice, type(Ellipsis), torch.Tensor] = ...) -> torch.Tensor:
         """
         Compute the activation MSE error = ||X @ quantized_weight - X @ reference_weight||^2
         Use the square-of-difference formula to avoid materializing per-batch predictions
