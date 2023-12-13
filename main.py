@@ -487,7 +487,20 @@ if __name__ == "__main__":
     )
     parser.add_argument("--wandb", action="store_true", help="Whether to use wandb or store locally.")
 
+
+    torch.set_num_threads(16)
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     args = parser.parse_args()
+    if args.devices is None:
+        args.devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
+    else:
+        args.devices = [torch.device(device_str) for device_str in range(args.devices)]
+    assert all(isinstance(device, torch.device) for device in args.devices)
+
 
     if args.wandb:
         assert has_wandb, "`wandb` not installed, try pip install `wandb`"
@@ -503,6 +516,7 @@ if __name__ == "__main__":
                 + f"_beam_search_epochs_{args.beam_search_epochs}"
                 + f"_init_max_iter{args.init_max_iter}"
                 + f"_{len(args.devices)}gpus"
+
         )
         args.group_size = args.in_group_size * args.out_group_size
 
@@ -515,18 +529,6 @@ if __name__ == "__main__":
             entity=os.environ.get("WANDB_ENTITY", "rock-and-roll"),
             save_code=True,
         )
-
-    torch.set_num_threads(16)
-    torch.backends.cudnn.allow_tf32 = False
-    torch.backends.cuda.matmul.allow_tf32 = False
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    if args.devices is None:
-        args.devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
-    else:
-        args.devices = [torch.device(device_str) for device_str in range(args.devices)]
-    assert all(isinstance(device, torch.device) for device in args.devices)
 
     print("\n============ Load model... ============")
     model = get_model(args.model_path, args.load, args.dtype, args.model_seqlen).train(False)
