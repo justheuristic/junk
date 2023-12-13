@@ -110,7 +110,7 @@ class AQUtil(nn.Module):
         else:
             assert isinstance(selection, slice)
             out_channel_selection = slice(selection.start * self.quantized_weight.out_group_size,
-                                          selection.end * self.quantized_weight.out_group_size)
+                                          selection.stop * self.quantized_weight.out_group_size)
 
             reference_weight = self.layer.weight.detach()[out_channel_selection].to(quantized_weight.dtype)
         delta_weight = (quantized_weight - reference_weight).to(XTX.dtype)
@@ -144,7 +144,7 @@ class AQUtil(nn.Module):
         for param_name, param_value in overrides.items():
             replace_parameter_(self.quantized_weight, param_name, param_value)
         out_channel_selection = slice(selection.start * self.quantized_weight.out_group_size,
-                                      selection.end * self.quantized_weight.out_group_size)
+                                      selection.stop * self.quantized_weight.out_group_size)
         reference_weight = self.layer.weight.detach()[out_channel_selection].to(self.XTX.dtype)
         return self.quantized_weight.beam_search_update_codes_(
             self.XTX, reference_weight, selection=selection, **kwargs)
