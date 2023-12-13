@@ -96,7 +96,7 @@ def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: in
     return clusters, nearest_indices, reconstructed_data
 
 
-def fit_faiss_kmeans(data: torch.Tensor, k: int, *, max_iter: int = 1000, gpu: bool,
+def fit_faiss_kmeans(data: torch.Tensor, k: int, *, max_iter: int = 1000, gpu: bool = True,
                      max_points_per_centroid: Optional[int] = None, verbose: bool = True):
     """
     :param data: [nsamples, dim]
