@@ -12,10 +12,11 @@ from src.aq import QuantizedWeight
 from src.utils import ellipsis
 
 
-class AQUtil:
+class AQUtil(nn.Module):
     """A wrapper class that runs AQ training for a single linear layer. All the important math is in QuantizedWeight """
 
     def __init__(self, layer: nn.Linear):
+        super().__init__()
         self.layer = layer
         self.device = layer.weight.device
         self.columns = self.layer.weight.data.shape[1]

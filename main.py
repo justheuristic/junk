@@ -211,7 +211,7 @@ def quantize_aq(model, dataloader, args, device):
                 quantizers["model.layers.%d.%s" % (i, sublayer_name)] = ()  # to be updated
 
         out_losses = []
-        for j in trange(args.nsamples, desc="calc outs after quantization", leave=False):
+        for j in trange(len(inps), desc="calc outs after quantization", leave=False):
             outs_batch = layer(inps[j].to(layer_device).unsqueeze(0), **forward_args)[0]
             if not args.skip_out_loss:
                 outs_batch_loss = (
