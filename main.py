@@ -44,38 +44,39 @@ def quantize_model(model, args, device):
 
 
 @torch.no_grad()
-def get_inps(model, data_iterable, args, dev, nsamples=None):
+def get_inps(model, data_iterable, args, device, nsamples=None):
     """mocks model launch to collect inputs to the first model layer"""
     print("catching inputs from data", flush=True)
 
     layers = get_layers(model)
 
-    nsamples = nsamples or args.nsamples
+    nsamples = nsamples or args.nsamples or len(data_iterable)
+    assert nsamples is not None
 
     if isinstance(data_iterable, torch.Tensor):
 
         def batch_generator(testenc, seqlen, nsamples):
             for i in range(nsamples):
-                batch = testenc[:, (i * seqlen): ((i + 1) * seqlen)].to(dev)
+                batch = testenc[:, (i * seqlen): ((i + 1) * seqlen)].to(device)
                 yield batch
 
         data_iterable = batch_generator(data_iterable, model.seqlen, nsamples)
 
     emb = model.get_input_embeddings()
-    emb_dev = emb.weight.device
-    if emb_dev.type != "cuda":
-        emb = emb.to(dev)
+    emb_device = emb.weight.device
+    if emb_device.type != "cuda":
+        emb = emb.to(device)
         # opt has other embeddings
         if model.config.model_type == "opt":
-            model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(dev)
+            model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(device)
             if hasattr(model.model.decoder, "project_in") and model.model.decoder.project_in:
-                model.model.decoder.project_in = model.model.decoder.project_in.to(dev)
-    dev = emb.weight.device  # now default device is the one where the embeddings are.
-    layer_dev = next(layers[0].parameters()).device
-    layers[0] = layers[0].to(dev)
+                model.model.decoder.project_in = model.model.decoder.project_in.to(device)
+    device = emb.weight.device  # now default device is the one where the embeddings are.
+    layer_device = next(layers[0].parameters()).device
+    layers[0] = layers[0].to(device)
 
     dtype = next(iter(model.parameters())).dtype
-    inps = torch.zeros((nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=dev)
+    inps = torch.zeros((nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=device)
 
     forward_arg_names = [
         "attention_mask",
@@ -103,20 +104,20 @@ def get_inps(model, data_iterable, args, dev, nsamples=None):
     for batch in data_iterable:
         try:
             if isinstance(batch, (list, tuple)):
-                model(batch[0].to(dev))
+                model(batch[0].to(device))
             elif isinstance(batch, torch.Tensor):
-                model(batch.to(dev))
+                model(batch.to(device))
         except ValueError:
             pass
     torch.set_num_threads(saved_num_threads)
     layers[0] = layers[0].module
 
-    layers[0] = layers[0].to(layer_dev)
-    model.get_input_embeddings().to(emb_dev)
+    layers[0] = layers[0].to(layer_device)
+    model.get_input_embeddings().to(emb_device)
     if model.config.model_type == "opt":
-        model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(emb_dev)
+        model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(emb_device)
         if hasattr(model.model.decoder, "project_in") and model.model.decoder.project_in:
-            model.model.decoder.project_in = model.model.decoder.project_in.to(emb_dev)
+            model.model.decoder.project_in = model.model.decoder.project_in.to(emb_device)
     torch.cuda.empty_cache()
 
     forward_args = {k: cache[k] for k in forward_arg_names}
@@ -127,7 +128,7 @@ def get_inps(model, data_iterable, args, dev, nsamples=None):
 def quantize_aq(model, dataloader, args, device):
     print("\nStarting AQ quantization ...")
 
-    inps, forward_args = get_inps(model, dataloader, args, dev="cpu" if args.offload_activations else device)
+    inps, forward_args = get_inps(model, dataloader, args, device="cpu" if args.offload_activations else device)
     outs = torch.zeros_like(inps)
 
     use_cache = model.config.use_cache
@@ -149,11 +150,11 @@ def quantize_aq(model, dataloader, args, device):
             layer = layers[i].to(device)
         else:
             layer = layers[i]
-        layer_dev = next(layers[i].parameters()).device
+        layer_device = next(layers[i].parameters()).device
         all_sublayers = find_sublayers(layer)
 
         for k, v in forward_args.items():
-            forward_args[k] = v.to(layer_dev) if isinstance(v, torch.Tensor) else v
+            forward_args[k] = v.to(layer_device) if isinstance(v, torch.Tensor) else v
 
         if args.true_sequential:
             sequential = get_sequential_groups(model)
@@ -177,7 +178,7 @@ def quantize_aq(model, dataloader, args, device):
             for sublayer_name in subset:
                 handles.append(subset[sublayer_name].register_forward_hook(add_batch(sublayer_name)))
             for j in trange(args.nsamples, desc="calc outs before quantization", leave=False):
-                outs[j] = layer(inps[j].to(layer_dev).unsqueeze(0), **forward_args)[0]
+                outs[j] = layer(inps[j].to(layer_device).unsqueeze(0), **forward_args)[0]
                 if args.offload_activations:
                     outs[j] = outs[j].cpu()
             for h in handles:
@@ -211,10 +212,10 @@ def quantize_aq(model, dataloader, args, device):
 
         out_losses = []
         for j in trange(args.nsamples, desc="calc outs after quantization", leave=False):
-            outs_batch = layer(inps[j].to(layer_dev).unsqueeze(0), **forward_args)[0]
+            outs_batch = layer(inps[j].to(layer_device).unsqueeze(0), **forward_args)[0]
             if not args.skip_out_loss:
                 outs_batch_loss = (
-                    (outs_batch - outs[j].to(layer_dev))
+                    (outs_batch - outs[j].to(layer_device))
                     .float()
                     .square()
                     .view(outs_batch.shape[0], -1)
@@ -274,7 +275,7 @@ def perplexity_eval(model, testenc, args, dev):
     model.config.use_cache = False
 
     inps, forward_args = get_inps(
-        model, testenc, args, dev="cpu" if args.offload_activations else dev, nsamples=nsamples
+        model, testenc, args, device="cpu" if args.offload_activations else dev, nsamples=nsamples
     )
     outs = torch.zeros_like(inps)
     for k, v in forward_args.items():
