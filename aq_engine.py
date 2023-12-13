@@ -77,10 +77,10 @@ class AQUtil(nn.Module):
 
         for epoch in range(args.num_epochs):
             loss = self._compute_mse()
-            # if len(args.devices) == 1:#TODO
-            #     loss = self._compute_mse()
-            # else:
-            #     loss = self._compute_mse_parallel(args.devices, replicas, differentiable_parameters)
+            if len(args.devices) == 1:
+                loss = self._compute_mse()
+            else:
+                loss = self._compute_mse_parallel(args.devices, replicas, differentiable_parameters)
 
             opt.zero_grad()
             loss.backward()
