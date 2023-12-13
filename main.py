@@ -187,7 +187,7 @@ def quantize_aq(model, dataloader, args, device):
 
             for sublayer_name in subset:
                 print(f"Quantizing module {sublayer_name} of layer {layer_index}")
-                set_seed(hash(f"{args.seed}|{layer_index}|{sublayer_name}") % (2 ** 32))
+                set_seed(f"{args.seed}|{layer_index}|{sublayer_name}")
                 quantized = aq_handlers[sublayer_name].quantize(args=args, verbose=True)
 
                 if save:
@@ -339,7 +339,9 @@ if __name__ == "__main__":
     )
     parser.add_argument("--load", type=str, default=None, help="Path to load quantized statistics.")
     parser.add_argument("--save", type=str, default=False, help="Path to save quantized statistics.")
-    parser.add_argument("--seed", type=int, default=0, help="Seed for sampling the calibration data.")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="Seed for calibration data and initialization. "
+                             "Note that the main training is not strictly deterministic.")
     parser.add_argument("--nsamples", type=int, default=None,
                         help="Number of calibration data samples.If None take all calibration data.")
     parser.add_argument(

@@ -1,5 +1,6 @@
 import os
 import random
+from typing import Union
 
 import numpy as np
 import torch
@@ -7,7 +8,9 @@ from datasets import load_dataset
 from transformers import AutoTokenizer, LlamaTokenizer
 
 
-def set_seed(seed):
+def set_seed(seed: Union[None, int, str, bytes]):
+    if not isinstance(seed, int):
+        seed = random.Generator(seed).getrandbits(32) % 2 ** 32
     random.seed(seed)
     np.random.seed(seed)
     torch.random.manual_seed(seed)
