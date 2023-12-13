@@ -76,7 +76,6 @@ class AQUtil(nn.Module):
             replicas[0] = self
 
         for epoch in range(args.num_epochs):
-            loss = self._compute_mse()
             if len(args.devices) == 1:
                 loss = self._compute_mse()
             else:
