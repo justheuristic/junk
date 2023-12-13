@@ -131,7 +131,7 @@ class QuantizedWeight(nn.Module):
             Formally, the indices must be in range [ 0 , self.out_features // self.out_group_size )
 
         """
-        return _reconstruct_weight(self.codes, self.get_codebooks()[selection], self.get_scales()[selection])
+        return _reconstruct_weight(self.codes[selection], self.get_codebooks(), self.get_scales()[selection])
 
     @torch.no_grad()
     def beam_search_update_codes_(
