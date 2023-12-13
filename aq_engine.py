@@ -77,7 +77,7 @@ class AQUtil(nn.Module):
 
         for epoch in range(args.num_epochs):
             loss = self._compute_mse()
-            # if len(args.devices) == 1:
+            # if len(args.devices) == 1:#TODO
             #     loss = self._compute_mse()
             # else:
             #     loss = self._compute_mse_parallel(args.devices, replicas, differentiable_parameters)
@@ -89,8 +89,9 @@ class AQUtil(nn.Module):
                 print(f"epoch={epoch}\tloss={loss.item():.10f}\t")
 
             if (epoch + 1) % args.beam_search_epochs == 0:
+                seed = random.getrandbits(256)
                 self.beam_search_update_codes_(
-                    args.devices, replicas, differentiable_parameters, beam_size=args.beam_size,
+                    args.devices, replicas, differentiable_parameters, seed=seed, beam_size=args.beam_size,
                     sparsity_regularizer=args.sparsity_regularizer, verbose=True)
         return self.quantized_weight
 
@@ -153,9 +154,8 @@ class AQUtil(nn.Module):
 
     @torch.no_grad()
     def beam_search_update_codes_(self, devices: Sequence[torch.device], replicas: Sequence[AQUtil],
-                                  parameters_to_replicate: nn.ParameterDict, **kwargs):
+                                  parameters_to_replicate: nn.ParameterDict, seed: Optional[int] = None, **kwargs):
         """Update self.quantized_weight.codes in-place via beam search"""
-        seed = random.getrandbits(256)
         if len(devices) == 1:  # single device
             assert replicas is None
             self.quantized_weight.beam_search_update_codes_(
@@ -172,7 +172,7 @@ class AQUtil(nn.Module):
             inputs_by_replica = [(dict(), active_slices_by_replica[0])]
             for i in range(1, len(devices)):
                 inputs_by_replica.append((replicated_parameters[i], active_slices_by_replica[i]))
-            kwargs_by_replica = [dict(kwargs) for _ in range(len(devices))]
+            kwargs_by_replica = [dict(kwargs, dim_rng=random.Random(seed)) for _ in range(len(devices))]
             new_code_parts_by_replica = torch.nn.parallel.parallel_apply(
                 funcs_by_replica, inputs_by_replica, kwargs_by_replica, devices=devices)
             # gather all code parts and assign them to each replica
