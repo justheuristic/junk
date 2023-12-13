@@ -141,7 +141,7 @@ class QuantizedWeight(nn.Module):
     @torch.no_grad()
     def beam_search_update_codes_(
             self, XTX: torch.Tensor, reference_weight: torch.Tensor, *,
-            selection: Union[slice, ellipsis, torch.LongTensor] = ..., **kwargs) -> torch.Tensor:
+            selection: Union[slice, Ellipsis, torch.LongTensor] = ..., **kwargs) -> torch:
         """
         Update self.codes in-place via beam search so as to minimize squared errors. Return the updated codes.
         :param XTX: pairwise products of input features matmul(X.transpose(), X), shape: [in_features, in_features]
