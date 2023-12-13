@@ -503,7 +503,7 @@ if __name__ == "__main__":
                 + f"_codebook_value_nbits_{args.codebook_value_nbits}"
                 + f"_codebook_value_num_groups_{args.codebook_value_num_groups}"
                 + f"_scale_nbits_{args.scale_nbits}"
-                + f"_beam_search_epochs_{args.beam_search_epochs}"
+                + f"_steps_per_epoch_{args.steps_per_epoch}"
                 + f"_init_max_iter{args.init_max_iter}"
                 + f"_{len(args.devices)}gpus"
 
