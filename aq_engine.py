@@ -92,7 +92,7 @@ class AQUtil(nn.Module):
                     sparsity_regularizer=args.sparsity_regularizer, verbose=True)
         return self.quantized_weight
 
-    def _compute_mse(self, selection: Union[slice, ellipsis, torch.Tensor] = ...) -> torch.Tensor:
+    def _compute_mse(self, selection: Union[slice, ellipsis] = ...) -> torch.Tensor:
         """
         Compute the activation MSE error = ||X @ quantized_weight - X @ reference_weight||^2
         Use the square-of-difference formula to avoid materializing per-batch predictions
@@ -104,7 +104,15 @@ class AQUtil(nn.Module):
         assert self.quantized_weight is not None, "must be called inside / after AQUtil.quantize"
         XTX = self.XTX.double()
         quantized_weight = self.quantized_weight(selection)
-        reference_weight = self.layer.weight.detach()[selection].to(quantized_weight.dtype)
+
+        if isinstance(selection, ellipsis):
+            reference_weight = self.layer.weight.detach().to(quantized_weight.dtype)
+        else:
+            assert isinstance(selection, slice)
+            out_channel_selection = slice(selection.start * self.quantized_weight.out_group_size,
+                                          selection.end * self.quantized_weight.out_group_size)
+
+            reference_weight = self.layer.weight.detach()[out_channel_selection].to(quantized_weight.dtype)
         delta_weight = (quantized_weight - reference_weight).to(XTX.dtype)
         return (delta_weight @ XTX).flatten() @ delta_weight.flatten() / self.quantized_weight.out_features
 
@@ -135,8 +143,11 @@ class AQUtil(nn.Module):
         """Utility for parallelism: replace the specified parameters of self.quantized_weight, then run beam search"""
         for param_name, param_value in overrides.items():
             replace_parameter_(self.quantized_weight, param_name, param_value)
+        out_channel_selection = slice(selection.start * self.quantized_weight.out_group_size,
+                                      selection.end * self.quantized_weight.out_group_size)
+        reference_weight = self.layer.weight.detach()[out_channel_selection].to(self.XTX.dtype)
         return self.quantized_weight.beam_search_update_codes_(
-            self.XTX, self.reference_weight, selection=selection, **kwargs)
+            self.XTX, reference_weight, selection=selection, **kwargs)
 
     @torch.no_grad()
     def beam_search_update_codes_(self, devices: Sequence[torch.device], replicas: Sequence[AQUtil],

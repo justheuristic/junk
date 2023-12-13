@@ -465,7 +465,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_points_per_centroid",
         type=int,
-        default=10**9,
+        default=None,
         help="Maximum data point per cluster in Kmeans",
     )
     parser.add_argument(
