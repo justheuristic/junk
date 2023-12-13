@@ -49,7 +49,6 @@ class AQUtil(nn.Module):
         """ create a QuantizedWeight based on the collected hessian (XTX) data"""
         assert isinstance(args.devices, (list, tuple)) and len(args.devices) >= 1, f"Found devices = {args.devices}"
         assert args.devices[0] == self.device, (args.devices[0], self.XTX.device)
-        assert args.num_epochs % args.beam_search_epochs == 0
         self.quantized_weight = QuantizedWeight.create_with_init_params(
             reference_weight=self.layer.weight.detach().to(self.device).float(),
             out_group_size=args.out_group_size,
@@ -75,23 +74,31 @@ class AQUtil(nn.Module):
             replicas = torch.nn.parallel.replicate(self, args.devices)
             replicas[0] = self
 
-        for epoch in range(args.num_epochs):
-            if len(args.devices) == 1:
-                loss = self._compute_mse()
-            else:
-                loss = self._compute_mse_parallel(args.devices, replicas, differentiable_parameters)
+        previous_best_loss = float('inf')  # for early stopping
+        for epoch in range(args.max_epochs):
+            # train codebooks and scales
+            for step in range(args.beam_search_epochs):
+                if len(args.devices) == 1:
+                    loss = self._compute_mse()
+                else:
+                    loss = self._compute_mse_parallel(args.devices, replicas, differentiable_parameters)
 
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            if epoch % args.print_frequency == 0 and verbose:
-                print(f"epoch={epoch}\tloss={loss.item():.10f}\t")
+                if step == 0 and args.relative_mse_tolerance is not None:
+                    if loss.item() / previous_best_loss > (1.0 - args.relative_mse_tolerance):
+                        return self.quantized_weight  # early stopping; no updates after last epoch's beam search
+                    previous_best_loss = min(previous_best_loss, loss.item())
 
-            if (epoch + 1) % args.beam_search_epochs == 0:
-                seed = random.getrandbits(256)
-                self.beam_search_update_codes_(
-                    args.devices, replicas, differentiable_parameters, seed=seed, beam_size=args.beam_size,
-                    sparsity_regularizer=args.sparsity_regularizer, verbose=True)
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+                if verbose and (epoch * args.beam_seach_epochs + step) % args.print_frequency == 0:
+                    print(f"epoch={epoch}\tstep={step}|loss={loss.item():.10f}\t")
+
+            # search for better codes (cluster indices)
+            seed = random.getrandbits(256)
+            self.beam_search_update_codes_(
+                args.devices, replicas, differentiable_parameters, seed=seed, beam_size=args.beam_size,
+                sparsity_regularizer=args.sparsity_regularizer, verbose=True)
         return self.quantized_weight
 
     def _compute_mse(self, selection: Union[slice, ellipsis] = ...) -> torch.Tensor:

@@ -324,26 +324,20 @@ if __name__ == "__main__":
         "dataset",
         type=str,
         default="none",
-        help="Dataset name [c4, pajama, refinedweb, none, etc.] or path to data where to extract calibration data from.",
-    )
-    parser.add_argument(
-        "--custom_data_path",
-        type=str,
-        default=None,
-        help="Path to load if specified. Deprecated",
+        help="Dataset name [c4, pajama, refinedweb] or path to data where to extract calibration data from.",
     )
     parser.add_argument(
         "--new_eval",
         action="store_true",
         help="if this is set, evaluate on new (and slightly more realistic!) val dataset versions",
     )
+    parser.add_argument("--nsamples", type=int, default=None,
+                        help="Number of calibration data samples.If None take all calibration data.")
     parser.add_argument("--load", type=str, default=None, help="Path to load quantized statistics.")
     parser.add_argument("--save", type=str, default=False, help="Path to save quantized statistics.")
     parser.add_argument("--seed", type=int, default=0,
                         help="Seed for calibration data and initialization. "
                              "Note that the main training is not strictly deterministic.")
-    parser.add_argument("--nsamples", type=int, default=None,
-                        help="Number of calibration data samples.If None take all calibration data.")
     parser.add_argument(
         "--skip_out_loss",
         action="store_true",
@@ -360,15 +354,22 @@ if __name__ == "__main__":
         help="Whether to run in true sequential model.",
     )
     parser.add_argument(
-        "--grouping",
-        action="store_true",
-        help="Whether to run in true sequential model.",
+        "--max_epochs",
+        type=int,
+        default=1000,
+        help="Maximum number of beam search rounds before the optimization is forcibly stopped.",
     )
     parser.add_argument(
-        "--num_epochs",
+        "--relative_mse_tolerance",
+        type=float,
+        default=None,
+        help="Stop training when when (current_epoch_mse / previous_epoch_mse) > (1 - relative_mse_tolerance)",
+    )
+    parser.add_argument(
+        "--steps_per_epoch",
         type=int,
-        default=500,
-        help="Number of epochs.",
+        default=100,
+        help="Run (this many) Adam updates before every beam search round",
     )
     parser.add_argument(
         "--model_seqlen",
@@ -378,48 +379,11 @@ if __name__ == "__main__":
         help="Model seqlen and calibration data context length.",
     )
     parser.add_argument(
-        "--init_max_iter",
-        type=int,
-        default=100,
-        help="Number of iterations used for k-means initializer",
-    )
-    parser.add_argument(
-        "--lr",
-        type=float,
-        default=1e-4,
-        help="learning rate for Adam optimizer",
-    )
-    parser.add_argument(
-        "--num_codebooks",
-        type=int,
-        default=1,
-        help="#Number of codebooks per layer",
-    )
-    parser.add_argument(
-        "--out_group_size",
-        type=int,
-        default=1,
-        help="how many output units are quantized together",
-    )
-    parser.add_argument(
-        "--in_group_size",
-        type=int,
-        default=8,
-        help="how many input features are quantized together",
-    )
-    parser.add_argument(
-        "--beam_size",
-        type=int,
-        default=1,
-        help="Keep top-(this_many) best candidates for each codebook when finding optimal codes",
-    )
-    parser.add_argument(
         "--nbits_per_codebook",
         type=int,
         default=16,
         help="each codebook will contain 2 ** nbits_per_codebook vectors",
     )
-
     parser.add_argument(
         "--scale_nbits",
         type=int,
@@ -441,27 +405,57 @@ if __name__ == "__main__":
         help="Split codebook vectors into this many groups for quantizations. Only used when quantized codebooks."
     )
     parser.add_argument(
-        "--beam_search_epochs",
+        "--init_max_iter",
         type=int,
         default=100,
-        help="Run beam search every (this many) Adam updates. Should be removed if we implement fast least squares",
+        help="Number of K-Means iterations used to initialize codebooks and codes",
+    )
+    parser.add_argument(
+        "--use_faiss",
+        action="store_true",
+        help="Whether to use faiss.Kmeans when initializing codebooks and codes",
+    )
+    parser.add_argument(
+        "--max_points_per_centroid",
+        type=int,
+        default=None,
+        help="During K-means initialzation, sample (this_many * 2 ^ nbits_per_codebook) points for training K-means",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=1e-4,
+        help="Learning rate for Adam optimizer",
+    )
+    parser.add_argument(
+        "--num_codebooks",
+        type=int,
+        default=1,
+        help="#Number of codebooks per layer",
+    )
+    parser.add_argument(
+        "--out_group_size",
+        type=int,
+        default=1,
+        help="How many output units are quantized together",
+    )
+    parser.add_argument(
+        "--in_group_size",
+        type=int,
+        default=8,
+        help="How many input features are quantized together",
+    )
+    parser.add_argument(
+        "--beam_size",
+        type=int,
+        default=1,
+        help="Keep top-(this_many) best candidates for each codebook when finding optimal codes",
     )
     parser.add_argument(
         "--sparsity_regularizer",
         type=int,
         default=0,
         help="An (optional) regularizer that promotes sparsity. Subtracted from loss for each zero code (index)",
-    )
-    parser.add_argument(
-        "--use_faiss",
-        action="store_true",
-        help="Whether to use faiss when initializing codebooks by kmeans.",
-    )
-    parser.add_argument(
-        "--max_points_per_centroid",
-        type=int,
-        default=None,
-        help="Maximum data point per cluster in Kmeans",
     )
     parser.add_argument(
         "--print_frequency",
@@ -498,7 +492,6 @@ if __name__ == "__main__":
     else:
         args.devices = [torch.device(device_str) for device_str in range(args.devices)]
     assert all(isinstance(device, torch.device) for device in args.devices)
-
 
     if args.wandb:
         assert has_wandb, "`wandb` not installed, try pip install `wandb`"
