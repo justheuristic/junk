@@ -153,8 +153,11 @@ class AQUtil(nn.Module):
             shard_size = (num_output_groups - 1) // len(devices) + 1
             active_slices_by_replica = [
                 slice(i * shard_size, min((i + 1) * shard_size, num_output_groups)) for i in range(len(devices))]
+
             funcs_by_replica = [replica._substitute_and_beam_search for replica in replicas]
-            inputs_by_replica = [(replicated_parameters[i], active_slices_by_replica[i]) for i in range(len(replicas))]
+            inputs_by_replica = [(dict(), active_slices_by_replica[i])]
+            for i in range(1, len(devices)):
+                inputs_by_replica.append((replicated_parameters[i], active_slices_by_replica[i]))
             kwargs_by_replica = [dict(kwargs) for _ in range(len(devices))]
             new_code_parts_by_replica = torch.nn.parallel.parallel_apply(
                 funcs_by_replica, inputs_by_replica, kwargs_by_replica, devices=devices)
@@ -165,5 +168,4 @@ class AQUtil(nn.Module):
 
 def replace_parameter_(module: nn.Module, name: str, new_value: torch.Tensor):
     """A hacky way to substitute an already registered parameter with a non-parameter tensor. Breaks future use."""
-    del module._parameters[name]
-    setattr(module, name, new_value)
+    module._parameters[name] = module
