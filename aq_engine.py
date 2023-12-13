@@ -159,10 +159,10 @@ class AQUtil(nn.Module):
         if len(devices) == 1:  # single device
             assert replicas is None
             self.quantized_weight.beam_search_update_codes_(
-                self.XTX, self.reference_weight, dim_rng=random.Random(seed), **kwargs)
+                self.XTX, self.layer.weight.detach().to(self.XTX.dtype), dim_rng=random.Random(seed), **kwargs)
         else:
             assert replicas[0] is self
-            replicated_parameters = torch.nn.parallel.replicate(parameters_to_replicate, devices, detach=False)
+            replicated_parameters = torch.nn.parallel.replicate(parameters_to_replicate, devices)
             num_output_groups = self.quantized_weight.out_features // self.quantized_weight.out_group_size
             shard_size = (num_output_groups - 1) // len(devices) + 1
             active_slices_by_replica = [
