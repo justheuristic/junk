@@ -72,7 +72,7 @@ class AQUtil(nn.Module):
 
         replicas = None
         if len(args.devices) > 1:
-            replicas = torch.nn.parallel.replicate(args.devices)
+            replicas = torch.nn.parallel.replicate(self, args.devices)
             replicas[0] = self
 
         for epoch in range(args.num_epochs):
