@@ -91,7 +91,7 @@ class AQUtil(nn.Module):
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
-                if verbose and (epoch * args.beam_seach_epochs + step) % args.print_frequency == 0:
+                if verbose and (epoch * args.steps_per_epoch + step) % args.print_frequency == 0:
                     print(f"epoch={epoch}\tstep={step}|loss={loss.item():.10f}\t")
 
             # search for better codes (cluster indices)
