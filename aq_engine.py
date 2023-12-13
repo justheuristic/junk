@@ -155,7 +155,7 @@ class AQUtil(nn.Module):
                 slice(i * shard_size, min((i + 1) * shard_size, num_output_groups)) for i in range(len(devices))]
 
             funcs_by_replica = [replica._substitute_and_beam_search for replica in replicas]
-            inputs_by_replica = [(dict(), active_slices_by_replica[i])]
+            inputs_by_replica = [(dict(), active_slices_by_replica[0])]
             for i in range(1, len(devices)):
                 inputs_by_replica.append((replicated_parameters[i], active_slices_by_replica[i]))
             kwargs_by_replica = [dict(kwargs) for _ in range(len(devices))]
