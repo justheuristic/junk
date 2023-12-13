@@ -177,7 +177,7 @@ def quantize_aq(model, dataloader, args, device):
             handles = []
             for sublayer_name in subset:
                 handles.append(subset[sublayer_name].register_forward_hook(add_batch(sublayer_name)))
-            for j in trange(args.nsamples, desc="calc outs before quantization", leave=False):
+            for j in trange(len(inps), desc="calc outs before quantization", leave=False):
                 outs[j] = layer(inps[j].to(layer_device).unsqueeze(0), **forward_args)[0]
                 if args.offload_activations:
                     outs[j] = outs[j].cpu()
