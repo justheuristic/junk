@@ -49,6 +49,7 @@ class AQUtil(nn.Module):
         """ create a QuantizedWeight based on the collected hessian (XTX) data"""
         assert isinstance(args.devices, (list, tuple)) and len(args.devices) >= 1, f"Found devices = {args.devices}"
         assert args.devices[0] == self.device, (args.devices[0], self.XTX.device)
+        assert args.num_epochs % args.beam_search_epochs == 0
         self.quantized_weight = QuantizedWeight.create_with_init_params(
             reference_weight=self.layer.weight.detach().to(self.device).float(),
             out_group_size=args.out_group_size,
@@ -90,10 +91,6 @@ class AQUtil(nn.Module):
                 self.beam_search_update_codes_(
                     args.devices, replicas, differentiable_parameters, beam_size=args.beam_size,
                     sparsity_regularizer=args.sparsity_regularizer, verbose=True)
-
-                print("CHECKSUM-SCALES", [replica.quantized_weight.get_scales().norm().item() for replica in replicas])
-                print("CHECKSUM-CODEBOOKS", [replica.quantized_weight.get_codebooks().norm().item() for replica in replicas])
-                print("CHECKSUM-CODES", [replica.quantized_weight.codes.double().sum().item() for replica in replicas])
         return self.quantized_weight
 
     def _compute_mse(self, selection: Union[slice, ellipsis] = ...) -> torch.Tensor:
