@@ -502,6 +502,7 @@ if __name__ == "__main__":
                 + f"_scale_nbits_{args.scale_nbits}"
                 + f"_beam_search_epochs_{args.beam_search_epochs}"
                 + f"_init_max_iter{args.init_max_iter}"
+                + f"_{len(args.devices)}gpus"
         )
         args.group_size = args.in_group_size * args.out_group_size
 
