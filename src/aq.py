@@ -549,8 +549,8 @@ def init_aq_kmeans(reference_weight: torch.Tensor, *,
     for _ in trange(num_codebooks, desc='initializing with kmeans') if verbose else range(num_codebooks):
         if use_faiss:
             codebook_i, codes_i, reconstructed_weight_i = fit_faiss_kmeans(
-                weight_residue, k=codebook_size, max_iter=max_iter, gpu=len(devices),
-                max_points_per_centroid=max_points_per_centroid or 10 ** 9)
+                weight_residue, k=codebook_size, max_iter=max_iter, gpu=(weight_residue.device.type == 'cuda'),
+                max_points_per_centroid=max_points_per_centroid)
         else:
             chosen_ids = None
             if max_points_per_centroid is not None:

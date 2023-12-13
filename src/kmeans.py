@@ -96,13 +96,15 @@ def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: in
     return clusters, nearest_indices, reconstructed_data
 
 
-def fit_faiss_kmeans(data: torch.Tensor, k: int, *, max_iter: int = 1000, gpu: int, verbose: bool = True,
-                     max_points_per_centroid=None):
+def fit_faiss_kmeans(data: torch.Tensor, k: int, *, max_iter: int = 1000, gpu: bool,
+                     max_points_per_centroid: Optional[int] = None, verbose: bool = True):
     """
     :param data: [nsamples, dim]
     :param k: number of centroids
     :param max_iter: run at most this many iterations
-    :param gpu: if zero, run kmeans on CPU. If specified, run kmeans on this many GPUs #TODO undo change
+    :param gpu: if True, run kmeans on (all available) GPUs; if False, run on CPU
+    :param max_points_per_centroid: if specified, train kmeans on a random subset of (this_many * k) points
+    :param verbose: if True, faiss.kmeans will print status to stdout
 
     :return: (clusters float[k, dim], data_indices int[nsamples], reconstructed_data: float[nsamples, dim])
     """
@@ -112,7 +114,7 @@ def fit_faiss_kmeans(data: torch.Tensor, k: int, *, max_iter: int = 1000, gpu: i
         assert "Faiss is not installed. Please install it before running this function."
 
     d = data.shape[1]
-    if max_points_per_centroid:
+    if max_points_per_centroid is not None:
         kmeans = faiss.Kmeans(d, k, niter=max_iter, verbose=verbose, gpu=gpu,
                               max_points_per_centroid=max_points_per_centroid)
     else:
