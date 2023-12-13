@@ -225,5 +225,5 @@ def get_loaders(name, nsamples=128, seed=0, seqlen=2048, eval_mode=False, model_
     if hasattr(data, "input_ids"):
         data = data.input_ids
 
-    print(f"Loaded data from {name}; {len(data)=}")
+    print(f"Loaded data from {name}; {len(data)=} sequences")
     return data
