@@ -20,7 +20,7 @@ class AQUtil(nn.Module):
         self.layer = layer
         self.device = layer.weight.device
         self.columns = self.layer.weight.data.shape[1]
-        self.XTX = torch.zeros((self.columns, self.columns), device=self.device)
+        self.register_buffer("XTX", torch.zeros((self.columns, self.columns), device=self.device))
         self.quantized_weight: Optional[QuantizedWeight] = None
         self.nsamples = 0
 
@@ -49,9 +49,8 @@ class AQUtil(nn.Module):
         """ create a QuantizedWeight based on the collected hessian (XTX) data"""
         assert isinstance(args.devices, (list, tuple)) and len(args.devices) >= 1, f"Found devices = {args.devices}"
         assert args.devices[0] == self.device, (args.devices[0], self.XTX.device)
-        self.reference_weight = self.layer.weight.detach().to(self.device).float()
         self.quantized_weight = QuantizedWeight.create_with_init_params(
-            reference_weight=self.reference_weight,
+            reference_weight=self.layer.weight.detach().to(self.device).float(),
             out_group_size=args.out_group_size,
             in_group_size=args.in_group_size,
             num_codebooks=args.num_codebooks,
@@ -104,7 +103,9 @@ class AQUtil(nn.Module):
         """
         assert self.quantized_weight is not None, "must be called inside / after AQUtil.quantize"
         XTX = self.XTX.double()
-        delta_weight = (self.quantized_weight(selection) - self.reference_weight[selection]).to(XTX.dtype)
+        quantized_weight = self.quantized_weight(selection)
+        reference_weight = self.layer.weight.detach()[selection].to(quantized_weight.dtype)
+        delta_weight = (quantized_weight - reference_weight).to(XTX.dtype)
         return (delta_weight @ XTX).flatten() @ delta_weight.flatten() / self.quantized_weight.out_features
 
     def _substitute_and_compute_mse(self, overrides: nn.ParameterDict, selection: slice) -> torch.Tensor:
