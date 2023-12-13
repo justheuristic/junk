@@ -1,5 +1,6 @@
 import random
 from typing import Optional, Tuple, Any, Dict, List, Union
+from types import EllipsisType
 
 import torch
 import torch.nn as nn
@@ -122,7 +123,7 @@ class QuantizedWeight(nn.Module):
         else:  # train scale codebook only
             return self.scales_clusters.gather(1, self.scales_indices)[:, :, None, None]
 
-    def forward(self, selection: Union[slice, type(Ellipsis), torch.Tensor] = ...):
+    def forward(self, selection: Union[slice, EllipsisType, torch.Tensor] = ...):
         """
         Differentably reconstruct the weight (or parts thereof) from compressed components
         :param selection: By default, reconstruct the entire weight. If selection is specified, this method will instead
@@ -136,7 +137,7 @@ class QuantizedWeight(nn.Module):
     @torch.no_grad()
     def beam_search_update_codes_(
             self, XTX: torch.Tensor, reference_weight: torch.Tensor, *,
-            selection: Union[slice, Ellipsis, torch.LongTensor] = ..., **kwargs) -> torch:
+            selection: Union[slice, EllipsisType, torch.LongTensor] = ..., **kwargs) -> torch:
         """
         Update self.codes in-place via beam search so as to minimize squared errors. Return the updated codes.
         :param XTX: pairwise products of input features matmul(X.transpose(), X), shape: [in_features, in_features]
