@@ -17,7 +17,6 @@ from src.modelutils import (
     get_model_head,
     get_sequential_groups,
 )
-from src.utils import calc_avg_bits
 
 try:
     import wandb
