@@ -1,6 +1,5 @@
 import random
 from typing import Optional, Tuple, Any, Dict, List, Union
-from types import EllipsisType
 
 import torch
 import torch.nn as nn
@@ -8,7 +7,7 @@ import torch.nn.functional as F
 from tqdm.auto import trange
 
 from src.kmeans import fit_kmeans, fit_kmeans_1d, fit_faiss_kmeans, find_nearest_cluster
-from src.utils import maybe_script
+from src.utils import maybe_script, ellipsis
 
 
 class QuantizedWeight(nn.Module):
@@ -123,7 +122,7 @@ class QuantizedWeight(nn.Module):
         else:  # train scale codebook only
             return self.scales_clusters.gather(1, self.scales_indices)[:, :, None, None]
 
-    def forward(self, selection: Union[slice, EllipsisType, torch.Tensor] = ...):
+    def forward(self, selection: Union[slice, ellipsis, torch.Tensor] = ...):
         """
         Differentably reconstruct the weight (or parts thereof) from compressed components
         :param selection: By default, reconstruct the entire weight. If selection is specified, this method will instead
@@ -137,7 +136,7 @@ class QuantizedWeight(nn.Module):
     @torch.no_grad()
     def beam_search_update_codes_(
             self, XTX: torch.Tensor, reference_weight: torch.Tensor, *,
-            selection: Union[slice, EllipsisType, torch.LongTensor] = ..., **kwargs) -> torch:
+            selection: Union[slice, ellipsis, torch.LongTensor] = ..., **kwargs) -> torch:
         """
         Update self.codes in-place via beam search so as to minimize squared errors. Return the updated codes.
         :param XTX: pairwise products of input features matmul(X.transpose(), X), shape: [in_features, in_features]
@@ -306,7 +305,7 @@ def beam_search_optimal_codes(
 
 @maybe_script
 def _reconstruct_weight(
-        codes: torch.IntTensor, codebooks: torch.Tensor, scales: Optional[torch.Tensor] = None) -> torch.Tensor:
+        codes: torch.Tensor, codebooks: torch.Tensor, scales: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Decode float weights from quantization codes. Differentiable.
     :param codes: tensor of integer quantization codes, shape [*dims, num_out_groups, num_in_groups, num_codebooks]

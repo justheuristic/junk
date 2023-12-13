@@ -3,6 +3,9 @@ import os
 import torch
 
 
+ellipsis = type(...)
+
+
 def get_mean_nbits_by_codebook(codes: torch.IntTensor, huffman_group_size: int = 2):
 
     '''
