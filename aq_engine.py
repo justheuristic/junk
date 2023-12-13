@@ -84,12 +84,16 @@ class AQUtil(nn.Module):
             loss.backward()
             opt.step()
             if epoch % args.print_frequency == 0 and verbose:
-                print(f"loss={loss.item():.10f}\t")
+                print(f"epoch={epoch}\tloss={loss.item():.10f}\t")
 
             if (epoch + 1) % args.beam_search_epochs == 0:
                 self.beam_search_update_codes_(
                     args.devices, replicas, differentiable_parameters, beam_size=args.beam_size,
                     sparsity_regularizer=args.sparsity_regularizer, verbose=True)
+
+                print("CHECKSUM-SCALES", [replica.quantized_weight.get_scales().norm() for replica in replicas])
+                print("CHECKSUM-CODEBOOKS", [replica.quantized_weight.get_codebooks().norm() for replica in replicas])
+                print("CHECKSUM-CODES", [replica.quantized_weight.codes.double().sum() for replica in replicas])
         return self.quantized_weight
 
     def _compute_mse(self, selection: Union[slice, ellipsis] = ...) -> torch.Tensor:
