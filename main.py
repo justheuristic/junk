@@ -144,9 +144,9 @@ def quantize_aq(model, dataloader, args, device):
         stats_payload = {}
         start_time = time.time()
 
-        layer_dev_original = next(layers[i].parameters()).device  # quantized layer will return there
-        print(f"{layer_dev_original=}")
-        if layer_dev_original.type != "cuda":
+        layer_device_original = next(layers[i].parameters()).device  # quantized layer will return there
+        print(f"{layer_device_original=}")
+        if layer_device_original.type != "cuda":
             layer = layers[i].to(device)
         else:
             layer = layers[i]
@@ -229,7 +229,7 @@ def quantize_aq(model, dataloader, args, device):
                 outs[j] = outs[j].cpu()
         del outs_batch
 
-        layers[i] = layer.to(layer_dev_original)
+        layers[i] = layer.to(layer_device_original)
         del layer
         del aq_handlers
         torch.cuda.empty_cache()
