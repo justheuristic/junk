@@ -178,9 +178,7 @@ def quantize_aq(model, dataloader, args, device):
             for sublayer_name in subset:
                 handles.append(subset[sublayer_name].register_forward_hook(add_batch(sublayer_name)))
             for j in trange(len(inps), desc="calc outs before quantization", leave=False):
-                outs[j] = layer(inps[j].to(layer_device).unsqueeze(0), **forward_args)[0]
-                if args.offload_activations:
-                    outs[j] = outs[j].cpu()
+                outs[j].copy_(layer(inps[j].to(layer_device).unsqueeze(0), **forward_args)[0], non_blocking=True)
             for h in handles:
                 h.remove()
 
@@ -224,9 +222,7 @@ def quantize_aq(model, dataloader, args, device):
                 )
                 outs_batch_loss /= outs_batch.view(outs_batch.shape[0], -1).float().std(dim=1)
                 out_losses.append(outs_batch_loss.item())
-            outs[j] = outs_batch
-            if args.offload_activations:
-                outs[j] = outs[j].cpu()
+            outs[j].copy_(outs_batch, non_blocking=True)
         del outs_batch
 
         layers[i] = layer.to(layer_device_original)
