@@ -175,7 +175,7 @@ class AQUtil(nn.Module):
                 funcs_by_replica, inputs_by_replica, kwargs_by_replica, devices=devices)
             # gather all code parts and assign them to each replica
             for device, replica in zip(devices, replicas):
-                replica.quantized_layer.codes[...] = Gather.apply(device, 0, *new_code_parts_by_replica)
+                replica.quantized_weight.codes[...] = Gather.apply(device, 0, *new_code_parts_by_replica)
 
 
 def replace_parameter_(module: nn.Module, name: str, new_value: torch.Tensor):
