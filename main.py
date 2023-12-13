@@ -7,7 +7,7 @@ from tqdm import trange
 from tqdm.auto import trange
 
 from aq_engine import AQUtil
-from src.datautils import get_loaders
+from src.datautils import get_loaders, set_seed
 from src.modelutils import (
     FALCON_TYPES,
     find_sublayers,
@@ -139,18 +139,18 @@ def quantize_aq(model, dataloader, args, device):
     overall_bits = 0
     model_number_of_params = 0
     layers = get_layers(model)
-    for i in range(len(layers)):
-        print(f"\n---------------- Layer {i} of {len(layers)} ----------------")
+    for layer_index in range(len(layers)):
+        print(f"\n---------------- Layer {layer_index} of {len(layers)} ----------------")
         stats_payload = {}
         start_time = time.time()
 
-        layer_device_original = next(layers[i].parameters()).device  # quantized layer will return there
+        layer_device_original = next(layers[layer_index].parameters()).device  # quantized layer will return there
         print(f"{layer_device_original=}")
         if layer_device_original.type != "cuda":
-            layer = layers[i].to(device)
+            layer = layers[layer_index].to(device)
         else:
-            layer = layers[i]
-        layer_device = next(layers[i].parameters()).device
+            layer = layers[layer_index]
+        layer_device = next(layers[layer_index].parameters()).device
         all_sublayers = find_sublayers(layer)
 
         for k, v in forward_args.items():
@@ -186,15 +186,13 @@ def quantize_aq(model, dataloader, args, device):
             torch.cuda.empty_cache()
 
             for sublayer_name in subset:
-                print(f"Quantizing module {sublayer_name} of layer {i}")
-                quantized = aq_handlers[sublayer_name].quantize(
-                    args=args,
-                    verbose=True,
-                )
+                print(f"Quantizing module {sublayer_name} of layer {layer_index}")
+                set_seed(hash(f"{args.seed}|{layer_index}|{sublayer_name}") % (2 ** 32))
+                quantized = aq_handlers[sublayer_name].quantize(args=args, verbose=True)
 
                 if save:
                     quantized.name = sublayer_name
-                    full_path = save + "/" + str(i) + "/"
+                    full_path = save + "/" + str(layer_index) + "/"
                     os.makedirs(full_path, exist_ok=True)
                     print("Saved params:", quantized.init_params)
                     torch.save((quantized.state_dict(), quantized.init_params), full_path + sublayer_name)
@@ -207,7 +205,7 @@ def quantize_aq(model, dataloader, args, device):
                 overall_bits += int(weight_avg_bits * torch.numel(aq_handlers[sublayer_name].layer.weight.data))
                 model_number_of_params += torch.numel(aq_handlers[sublayer_name].layer.weight.data)
                 print("curent_avg_bits", overall_bits / model_number_of_params)
-                quantizers["model.layers.%d.%s" % (i, sublayer_name)] = ()  # to be updated
+                quantizers["model.layers.%d.%s" % (layer_index, sublayer_name)] = ()  # to be updated
 
         out_losses = []
         for j in trange(len(inps), desc="calc outs after quantization", leave=False):
@@ -226,7 +224,7 @@ def quantize_aq(model, dataloader, args, device):
             outs[j].copy_(outs_batch.reshape_as(outs[j]), non_blocking=True)
         del outs_batch
 
-        layers[i] = layer.to(layer_device_original)
+        layers[layer_index] = layer.to(layer_device_original)
         del layer
         del aq_handlers
         torch.cuda.empty_cache()
@@ -236,10 +234,10 @@ def quantize_aq(model, dataloader, args, device):
         # Logging
         stats_payload["layer_time"] = time.time() - start_time
         stats_payload["out_loss"] = torch.mean(torch.Tensor(out_losses)).item()
-        stats_payload["Step"] = i
+        stats_payload["Step"] = layer_index
         if args.wandb:
-            wandb.log({"out_loss": stats_payload["out_loss"]}, step=i)
-            wandb.log({"layer_time": stats_payload["layer_time"]}, step=i)
+            wandb.log({"out_loss": stats_payload["out_loss"]}, step=layer_index)
+            wandb.log({"layer_time": stats_payload["layer_time"]}, step=layer_index)
         print(stats_payload)
 
     print("=====================\nFinal stats:")
