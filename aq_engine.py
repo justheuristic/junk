@@ -168,4 +168,5 @@ class AQUtil(nn.Module):
 
 def replace_parameter_(module: nn.Module, name: str, new_value: torch.Tensor):
     """A hacky way to substitute an already registered parameter with a non-parameter tensor. Breaks future use."""
-    module._parameters[name] = module
+    assert name in module._parameters
+    module._parameters[name] = new_value
