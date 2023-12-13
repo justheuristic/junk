@@ -102,7 +102,7 @@ def fit_faiss_kmeans(data: torch.Tensor, k: int, *, max_iter: int = 1000, gpu: i
     :param data: [nsamples, dim]
     :param k: number of centroids
     :param max_iter: run at most this many iterations
-    :param gpu: if zero, run kmeans on CPU. If specified, run kmeans on this many GPUs
+    :param gpu: if zero, run kmeans on CPU. If specified, run kmeans on this many GPUs #TODO undo change
 
     :return: (clusters float[k, dim], data_indices int[nsamples], reconstructed_data: float[nsamples, dim])
     """
