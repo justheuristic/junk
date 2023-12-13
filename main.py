@@ -187,7 +187,6 @@ def quantize_aq(model, dataloader, args, device):
 
             for sublayer_name in subset:
                 print(f"Quantizing module {sublayer_name} of layer {layer_index}")
-                set_seed(f"{args.seed}|{layer_index}|{sublayer_name}")
                 quantized = aq_handlers[sublayer_name].quantize(args=args, verbose=True)
 
                 if save:
