@@ -312,7 +312,7 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
     aq_handlers = {}
     for sublayer_name in subset:
         aq_handlers[sublayer_name] = AQUtil(subset[sublayer_name])
-    layer_device = next(aq_handlers.values()).device
+    layer_device = next(iter(aq_handlers.values())).device
 
     def add_batch(name):
         def tmp(_, inp, out):
@@ -334,8 +334,7 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
 def init_aq_engines_parallel(devices: Sequence[torch.device], layer: nn.Module, names: Sequence[str],
                              inps: Sequence[torch.Tensor], outs: Sequence[torch.Tensor], **forward_args):
     """Parallel version of init_aq_engines; works on lists of input/output tensors"""
-    layer_replicas = torch.nn.parallel.replicate(layer, devices=devices, detach=True)  # we must use detach=True ...
-    # here becuse if detach=False, the replica parameters will be replaced by non-Parameter tensors that breaks the code
+    layer_replicas = torch.nn.parallel.replicate(layer, devices=devices, detach=True)
     funcs_by_device = [init_aq_engines for _ in devices]
     inputs_by_device = []
     kwargs_by_device = []
@@ -394,8 +393,7 @@ def update_outs_parallel(
         devices: Sequence[torch.device], layer: nn.Module, inps: Sequence[torch.Tensor], outs: Sequence[torch.Tensor],
         compute_mse: bool, **forward_args) -> Sequence[float]:
     """Parallel version of update_outs_and_compute_losses; works on lists of input/output tensors"""
-    layer_replicas = torch.nn.parallel.replicate(layer, devices=devices, detach=True)  # we must use detach=True ...
-    # here becuse if detach=False, the replica parameters will be replaced by non-Parameter tensors that breaks the code
+    layer_replicas = torch.nn.parallel.replicate(layer, devices=devices, detach=True)
     funcs_by_device = [update_outs for _ in devices]
     inputs_by_device = []
     kwargs_by_device = []
