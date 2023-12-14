@@ -251,6 +251,8 @@ def perplexity_eval(model, testenc, args):
     model.config.use_cache = False
 
     inps, forward_args = get_inps(model, testenc, args, nsamples=nsamples)
+    print('!' * 999)
+    print([x.device for x in inps])
     outs = [torch.zeros_like(inp_tensor) for inp_tensor in inps]
     device = args.devices[0]
     for k, v in forward_args.items():
