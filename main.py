@@ -188,6 +188,7 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
                     torch.save((quantized.state_dict(), quantized.init_params), full_path + sublayer_name)
 
                 with torch.no_grad():
+                    assert aq_handlers[sublayer_name].layer.weight in set(layer.parameters())
                     aq_handlers[sublayer_name].layer.weight.data = quantized().to(
                         aq_handlers[sublayer_name].layer.weight.data.dtype)
 
