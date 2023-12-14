@@ -314,8 +314,6 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
         aq_handlers[sublayer_name] = AQUtil(subset[sublayer_name])
     layer_device = next(iter(aq_handlers.values())).device
 
-    print(end=f"MY_DEVICE{layer_device}  inp_device{inps_tensor.device}\n")
-
     def add_batch(name):
         def tmp(_, inp, out):
             aq_handlers[name].add_batch(inp[0].data)  # noqa: F821
