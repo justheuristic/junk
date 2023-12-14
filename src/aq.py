@@ -1,5 +1,5 @@
 import random
-from typing import Optional, Tuple, Any, Dict, List
+from typing import Optional, Tuple, Any, Dict, List, Union
 
 import torch
 import torch.nn as nn
@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from tqdm.auto import trange
 
 from src.kmeans import fit_kmeans, fit_kmeans_1d, fit_faiss_kmeans, find_nearest_cluster
-from src.utils import maybe_script
+from src.utils import maybe_script, ellipsis
 
 
 class QuantizedWeight(nn.Module):
@@ -16,6 +16,7 @@ class QuantizedWeight(nn.Module):
 
     @classmethod
     def create_with_init_params(cls, *args, **kwargs):
+        """Create normally, then save all params passed to init for future serialization"""
         module = cls(*args, **kwargs)
         module.init_params = args, kwargs
         return module
@@ -26,19 +27,24 @@ class QuantizedWeight(nn.Module):
                  out_group_size: int,
                  num_codebooks: int,
                  nbits_per_codebook: int = 8,
+                 codebook_value_nbits: int = 16,
+                 codebook_value_num_groups: int = 1,
                  scale_nbits: int = 0,
                  straight_through_gradient: Optional[bool] = None,
                  **init_kwargs
                  ):
         super().__init__()
-        out_features, in_features = reference_weight.shape
-        assert in_features % in_group_size == 0
-        assert out_features % out_group_size == 0
+        self.out_features, self.in_features = reference_weight.shape
+        assert self.in_features % in_group_size == 0
+        assert self.out_features % out_group_size == 0
 
         self.out_group_size, self.in_group_size = out_group_size, in_group_size
         self.num_codebooks = num_codebooks
         self.nbits_per_codebook = nbits_per_codebook
         self.codebook_size = codebook_size = 2 ** nbits_per_codebook
+        self.codebook_value_nbits = codebook_value_nbits
+        self.codebook_value_num_groups = codebook_value_num_groups
+        self.codebook_value_clusters = None
 
         self.scales = self.scales_clusters = self.scales_indices = None
         if straight_through_gradient is None and scale_nbits > 0:
@@ -48,8 +54,8 @@ class QuantizedWeight(nn.Module):
 
         with torch.no_grad():
             weight_groupwise = reference_weight.reshape(
-                out_features // out_group_size, out_group_size,
-                in_features // in_group_size, in_group_size
+                self.out_features // out_group_size, out_group_size,
+                self.in_features // in_group_size, in_group_size
             ).swapaxes(1, 2)  # [num_out_groups, num_in_groups, out_group_size, in_group_size]
 
             if scale_nbits > 0:
@@ -75,19 +81,39 @@ class QuantizedWeight(nn.Module):
             out_group_size=out_group_size, in_group_size=in_group_size,
             codebook_size=self.codebook_size, **init_kwargs)
 
-        self.codebooks = nn.Parameter(codebooks, requires_grad=True)
-        self.codes = nn.Parameter(codes, requires_grad=False)
+        self.codebooks = nn.Parameter(codebooks, requires_grad=True)  # [num_codebooks, codebook_size, out_group_size, in_group_size]
+        self.codes = nn.Parameter(codes, requires_grad=False)  #  [num_out_groups, num_in_groups, num_codebooks]
 
-    def forward(self):
-        return _reconstruct_weight(self.codes, self.codebooks, self.get_scales())
+    def get_codebooks(self) -> torch.Tensor:
+        """Get quantization codebooks or reconstruct them from second level quantization (see codebook_values_nbits)"""
+        if self.codebook_value_nbits >= 16:
+            return self.codebooks
+        elif 0 < self.codebook_value_nbits < 16:
+            with torch.no_grad():
+                codebooks_dimshuffle = self.codebooks.reshape(
+                    self.num_codebooks, self.codebook_value_num_groups,
+                    self.codebook_size // self.codebook_value_num_groups, self.out_group_size, self.in_group_size
+                ).permute(0, 1, 3, 4, 2).flatten(0, -2)
+                self.codebook_value_clusters, _unused, reconstructed_codebooks_dimshuffle = fit_kmeans_1d(
+                    codebooks_dimshuffle, k=2 ** self.codebook_value_nbits, initial_clusters=self.codebook_value_clusters
+                )
+                reconstructed_codebooks = reconstructed_codebooks_dimshuffle.view(
+                    self.num_codebooks, self.codebook_value_num_groups, self.out_group_size, self.in_group_size,
+                    self.codebook_size // self.codebook_value_num_groups
+                ).permute(0, 1, 4, 2, 3).reshape_as(self.codebooks)
+            if torch.is_grad_enabled():
+                reconstructed_codebooks = reconstructed_codebooks + (self.codebooks - self.codebooks.detach())
+            return reconstructed_codebooks
+        raise NotImplementedError(f"{self.codebook_value_nbits}-bit codebook values are not supported")
 
-    def get_scales(self):
+    def get_scales(self) -> torch.Tensor:
+        """Get per-channel or per-group quantization scales or reconstruct those scales based on scales_nbits """
         if self.scale_nbits == 0 or self.scales_are_lossless:
             return self.scales  # scales are not quantized or the quantization is lossless
         elif self.straight_through_gradient:
             with torch.no_grad():
-                _, _, dequantized_scales = fit_kmeans_1d(
-                    self.scales.flatten(1, -1), k=2 ** self.scale_nbits,
+                self.scales_clusters, _, dequantized_scales = fit_kmeans_1d(
+                    self.scales.flatten(1, -1), k=2 ** self.scale_nbits, initial_clusters=self.scales_clusters
                 )
                 dequantized_scales = dequantized_scales.reshape_as(self.scales)
             if torch.is_grad_enabled() and self.scales.requires_grad:
@@ -96,20 +122,68 @@ class QuantizedWeight(nn.Module):
         else:  # train scale codebook only
             return self.scales_clusters.gather(1, self.scales_indices)[:, :, None, None]
 
-    @torch.no_grad()
-    def requantize_(self, XTX: torch.Tensor, reference_weight: torch.Tensor, *, beam_size: int, **kwargs):
+    def forward(self, selection: Union[slice, ellipsis, torch.Tensor] = ...):
         """
-        Update self.codes in-place via beam search so as to minimize squared errors
+        Differentably reconstruct the weight (or parts thereof) from compressed components
+        :param selection: By default, reconstruct the entire weight. If selection is specified, this method will instead
+            reconstruct a portion of weight for the corresponding output dimensions (used for parallelism).
+            The indices / slices must correspond to output channels (if out_group_size==1) or groups (if > 1).
+            Formally, the indices must be in range [ 0 , self.out_features // self.out_group_size )
+
+        """
+        return _reconstruct_weight(self.codes[selection], self.get_codebooks(), self.get_scales()[selection])
+
+    @torch.no_grad()
+    def beam_search_update_codes_(
+            self, XTX: torch.Tensor, reference_weight: torch.Tensor, *,
+            selection: Union[slice, ellipsis, torch.LongTensor] = ..., **kwargs) -> torch:
+        """
+        Update self.codes in-place via beam search so as to minimize squared errors. Return the updated codes.
         :param XTX: pairwise products of input features matmul(X.transpose(), X), shape: [in_features, in_features]
         :note: if XTX is divided by dataset size, this function will return *mean* squared error
         :param reference_weight: original weight matrix that is being quantized, shape: [out_features, in_features]
-        :param beam_size: consider up to this many best encoding combinations
-        Any additional keyword arguments are forwarded to beam_search_optimal_codes
+        :note: if selection is specified, reference_weight must instead be [num_selected_out_features, in_features]
+        :param selection:  By default, this function updates all codes, If selection specified, it will instead
+            update only the codes for a portion of output dimensions (used for parallelism).
+            The indices / slices must correspond to output channels (if out_group_size==1) or groups (if > 1).
+            Formally, the indices must be in range [ 0 , self.out_features // self.out_group_size )
+        :param beam_size: consider up to this many best encoding combinations (this param is passed through via kwargs)
+        :param kwargs: any additional keyword arguments are forwarded to beam_search_optimal_codes function
+        :returns: the updated codes
         """
-        self.codes[...] = beam_search_optimal_codes(
-            XTX=XTX, reference_weight=reference_weight, codebooks=self.codebooks, prev_codes=self.codes,
-            scales=self.get_scales(), beam_size=beam_size, **kwargs
+        self.codes[selection] = beam_search_optimal_codes(
+            XTX=XTX, reference_weight=reference_weight, codebooks=self.get_codebooks(),
+            prev_codes=self.codes[selection], scales=self.get_scales()[selection], **kwargs
         )
+        return self.codes[selection]
+
+    def estimate_nbits_per_parameter(self) -> float:
+        """Calculate the effective number of bits per original matrix parameters"""
+        num_parameters = self.out_features * self.in_features
+        group_size = self.out_group_size * self.in_group_size
+        num_out_groups = self.out_features // self.out_group_size
+        num_in_groups = self.in_features // self.in_group_size
+
+        matrix_store = num_parameters // group_size * self.num_codebooks * self.nbits_per_codebook
+
+        codebooks_store = self.num_codebooks * self.codebook_size * group_size * self.codebook_value_nbits
+        if self.codebook_value_nbits < 16:
+            codebooks_store += (2 ** self.codebook_value_nbits * self.num_codebooks
+                                * self.codebook_value_num_groups * group_size * 16)
+
+        if self.scale_nbits >= 16 or 2 ** self.scale_nbits >= num_in_groups:  # group-wise scales in 16 bit
+            scale_store = self.scale_nbits * num_out_groups * num_in_groups
+        elif 0 < self.scale_nbits < 16:  # use scale quantization codebooks
+            scale_store = self.scale_nbits * num_out_groups * num_in_groups
+            scale_store += num_out_groups * 2 ** self.scale_nbits * 16
+        elif self.scale_nbits == 0:  # no group-wise scales; use global 1d scales instead
+            scale_store = num_out_groups * 16
+        else:
+            assert False
+        return (matrix_store + codebooks_store + scale_store) / num_parameters
+
+    def extra_repr(self) -> str:
+        return f"{self.out_features=}, {self.in_features=}, bits_per_parameter={self.estimate_nbits_per_parameter()}"
 
 
 @torch.inference_mode()
@@ -231,7 +305,7 @@ def beam_search_optimal_codes(
 
 @maybe_script
 def _reconstruct_weight(
-        codes: torch.IntTensor, codebooks: torch.Tensor, scales: Optional[torch.Tensor] = None) -> torch.Tensor:
+        codes: torch.Tensor, codebooks: torch.Tensor, scales: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Decode float weights from quantization codes. Differentiable.
     :param codes: tensor of integer quantization codes, shape [*dims, num_out_groups, num_in_groups, num_codebooks]
@@ -451,7 +525,7 @@ def _channelwise_squared_error(XTX: torch.Tensor, weight: torch.Tensor, referenc
 @torch.no_grad()
 def init_aq_kmeans(reference_weight: torch.Tensor, *,
                    num_codebooks: int, out_group_size: int, in_group_size: int, codebook_size: int,
-                   verbose: bool = False, use_faiss: bool = False, max_points_per_centroid: int = 10 ** 9,
+                   verbose: bool = False, use_faiss: bool = False, max_points_per_centroid: Optional[int] = None,
                    max_iter: int = 1000, devices: Optional[List[torch.device]] = None, **kwargs):
     """
     Create initial codes and codebooks using residual K-means clustering of weights
@@ -469,22 +543,23 @@ def init_aq_kmeans(reference_weight: torch.Tensor, *,
     codebooks = []
     codes = []
 
+    if max_points_per_centroid is not None:
+        print("Clustering:", max_points_per_centroid * codebook_size, "points from", weight_residue.shape[0])
+
     for _ in trange(num_codebooks, desc='initializing with kmeans') if verbose else range(num_codebooks):
         if use_faiss:
-            codebook_i, codes_i, reconstructed_weight_i = fit_faiss_kmeans(weight_residue, k=codebook_size,
-                                                                           max_iter=max_iter,
-                                                                           gpu=(weight_residue.device.type != 'cpu'),
-                                                                           max_points_per_centroid=max_points_per_centroid)
-        elif max_points_per_centroid * codebook_size < weight_residue.shape[0]:
-            print("Clustering: ", max_points_per_centroid * codebook_size, "points from ", weight_residue.shape[0])
-            codebook_i, _, _ = fit_kmeans(
-                weight_residue[torch.randperm(weight_residue.shape[0])[:max_points_per_centroid * codebook_size], :],
-                k=codebook_size, max_iter=max_iter, devices=devices, **kwargs)
-            codes_i, reconstructed_weight_i = find_nearest_cluster(weight_residue, codebook_i,
-                                                                   devices=devices)
+            codebook_i, codes_i, reconstructed_weight_i = fit_faiss_kmeans(
+                weight_residue, k=codebook_size, max_iter=max_iter, gpu=(weight_residue.device.type == 'cuda'),
+                max_points_per_centroid=max_points_per_centroid)
         else:
-            codebook_i, codes_i, reconstructed_weight_i = fit_kmeans(weight_residue, k=codebook_size, max_iter=max_iter,
-                                                                     devices=devices, **kwargs)
+            chosen_ids = None
+            if max_points_per_centroid is not None:
+                chosen_ids = torch.randperm(
+                    weight_residue.shape[0], device=weight_residue.device)[:max_points_per_centroid * codebook_size]
+            codebook_i, _, _ = fit_kmeans(
+                weight_residue if chosen_ids is None else weight_residue[chosen_ids, :],
+                k=codebook_size, max_iter=max_iter, devices=devices, **kwargs)
+            codes_i, reconstructed_weight_i = find_nearest_cluster(weight_residue, codebook_i, devices=devices)
 
         codes_i = codes_i.reshape(num_out_groups, num_in_groups, 1)
         codebook_i = codebook_i.reshape(1, codebook_size, out_group_size, in_group_size)

@@ -1,5 +1,6 @@
 import os
 import random
+from typing import Optional
 
 import numpy as np
 import torch
@@ -7,7 +8,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer, LlamaTokenizer
 
 
-def set_seed(seed):
+def set_seed(seed: Optional[int]):
     random.seed(seed)
     np.random.seed(seed)
     torch.random.manual_seed(seed)
@@ -224,5 +225,5 @@ def get_loaders(name, nsamples=128, seed=0, seqlen=2048, eval_mode=False, model_
     if hasattr(data, "input_ids"):
         data = data.input_ids
 
-    print(f"Loaded data from {name}; {len(data)=}")
+    print(f"Loaded data from {name}; {len(data)=} sequences")
     return data

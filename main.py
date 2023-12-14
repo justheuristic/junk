@@ -7,7 +7,7 @@ from tqdm import trange
 from tqdm.auto import trange
 
 from aq_engine import AQUtil
-from src.datautils import get_loaders
+from src.datautils import get_loaders, set_seed
 from src.modelutils import (
     FALCON_TYPES,
     find_sublayers,
@@ -17,7 +17,6 @@ from src.modelutils import (
     get_model_head,
     get_sequential_groups,
 )
-from src.utils import calc_avg_bits
 
 try:
     import wandb
@@ -45,38 +44,39 @@ def quantize_model(model, args, device):
 
 
 @torch.no_grad()
-def get_inps(model, data_iterable, args, dev, nsamples=None):
+def get_inps(model, data_iterable, args, device, nsamples=None):
     """mocks model launch to collect inputs to the first model layer"""
-    print("catching inputs from data", flush=True)
+    print("catching layer inputs from data", flush=True)
 
     layers = get_layers(model)
 
-    nsamples = nsamples or args.nsamples
+    nsamples = nsamples or args.nsamples or len(data_iterable)
+    assert nsamples is not None
 
     if isinstance(data_iterable, torch.Tensor):
 
         def batch_generator(testenc, seqlen, nsamples):
             for i in range(nsamples):
-                batch = testenc[:, (i * seqlen): ((i + 1) * seqlen)].to(dev)
+                batch = testenc[:, (i * seqlen): ((i + 1) * seqlen)].to(device)
                 yield batch
 
         data_iterable = batch_generator(data_iterable, model.seqlen, nsamples)
 
     emb = model.get_input_embeddings()
-    emb_dev = emb.weight.device
-    if emb_dev.type != "cuda":
-        emb = emb.to(dev)
+    emb_device = emb.weight.device
+    if emb_device.type != "cuda":
+        emb = emb.to(device)
         # opt has other embeddings
         if model.config.model_type == "opt":
-            model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(dev)
+            model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(device)
             if hasattr(model.model.decoder, "project_in") and model.model.decoder.project_in:
-                model.model.decoder.project_in = model.model.decoder.project_in.to(dev)
-    dev = emb.weight.device  # now default device is the one where the embeddings are.
-    layer_dev = next(layers[0].parameters()).device
-    layers[0] = layers[0].to(dev)
+                model.model.decoder.project_in = model.model.decoder.project_in.to(device)
+    device = emb.weight.device  # now default device is the one where the embeddings are.
+    layer_device = next(layers[0].parameters()).device
+    layers[0] = layers[0].to(device)
 
     dtype = next(iter(model.parameters())).dtype
-    inps = torch.zeros((nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=dev)
+    inps = torch.zeros((nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=device)
 
     forward_arg_names = [
         "attention_mask",
@@ -104,20 +104,20 @@ def get_inps(model, data_iterable, args, dev, nsamples=None):
     for batch in data_iterable:
         try:
             if isinstance(batch, (list, tuple)):
-                model(batch[0].to(dev))
+                model(batch[0].to(device))
             elif isinstance(batch, torch.Tensor):
-                model(batch.to(dev))
+                model(batch.to(device))
         except ValueError:
             pass
     torch.set_num_threads(saved_num_threads)
     layers[0] = layers[0].module
 
-    layers[0] = layers[0].to(layer_dev)
-    model.get_input_embeddings().to(emb_dev)
+    layers[0] = layers[0].to(layer_device)
+    model.get_input_embeddings().to(emb_device)
     if model.config.model_type == "opt":
-        model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(emb_dev)
+        model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(emb_device)
         if hasattr(model.model.decoder, "project_in") and model.model.decoder.project_in:
-            model.model.decoder.project_in = model.model.decoder.project_in.to(emb_dev)
+            model.model.decoder.project_in = model.model.decoder.project_in.to(emb_device)
     torch.cuda.empty_cache()
 
     forward_args = {k: cache[k] for k in forward_arg_names}
@@ -128,7 +128,7 @@ def get_inps(model, data_iterable, args, dev, nsamples=None):
 def quantize_aq(model, dataloader, args, device):
     print("\nStarting AQ quantization ...")
 
-    inps, forward_args = get_inps(model, dataloader, args, dev="cpu" if args.offload_activations else device)
+    inps, forward_args = get_inps(model, dataloader, args, device="cpu" if args.offload_activations else device)
     outs = torch.zeros_like(inps)
 
     use_cache = model.config.use_cache
@@ -139,22 +139,22 @@ def quantize_aq(model, dataloader, args, device):
     overall_bits = 0
     model_number_of_params = 0
     layers = get_layers(model)
-    for i in range(len(layers)):
-        print(f"\n---------------- Layer {i} of {len(layers)} ----------------")
+    for layer_index in range(len(layers)):
+        print(f"\n---------------- Layer {layer_index} of {len(layers)} ----------------")
         stats_payload = {}
         start_time = time.time()
 
-        layer_dev_original = next(layers[i].parameters()).device  # quantized layer will return there
-        print(f"{layer_dev_original=}")
-        if layer_dev_original.type != "cuda":
-            layer = layers[i].to(device)
+        layer_device_original = next(layers[layer_index].parameters()).device  # quantized layer will return there
+        print(f"{layer_device_original=}")
+        if layer_device_original.type != "cuda":
+            layer = layers[layer_index].to(device)
         else:
-            layer = layers[i]
-        layer_dev = next(layers[i].parameters()).device
+            layer = layers[layer_index]
+        layer_device = next(layers[layer_index].parameters()).device
         all_sublayers = find_sublayers(layer)
 
         for k, v in forward_args.items():
-            forward_args[k] = v.to(layer_dev) if isinstance(v, torch.Tensor) else v
+            forward_args[k] = v.to(layer_device) if isinstance(v, torch.Tensor) else v
 
         if args.true_sequential:
             sequential = get_sequential_groups(model)
@@ -177,25 +177,21 @@ def quantize_aq(model, dataloader, args, device):
             handles = []
             for sublayer_name in subset:
                 handles.append(subset[sublayer_name].register_forward_hook(add_batch(sublayer_name)))
-            for j in trange(args.nsamples, desc="calc outs before quantization", leave=False):
-                outs[j] = layer(inps[j].to(layer_dev).unsqueeze(0), **forward_args)[0]
-                if args.offload_activations:
-                    outs[j] = outs[j].cpu()
+            for j in trange(len(inps), desc="calc outs before quantization", leave=False):
+                outs[j].copy_(layer(inps[j].to(layer_device).unsqueeze(0), **forward_args)[0].view_as(outs[j]),
+                              non_blocking=True)
             for h in handles:
                 h.remove()
 
             torch.cuda.empty_cache()
 
             for sublayer_name in subset:
-                print(f"Quantizing module {sublayer_name} of layer {i}")
-                quantized = aq_handlers[sublayer_name].quantize(
-                    args=args,
-                    verbose=True,
-                )
+                print(f"Quantizing module {sublayer_name} of layer {layer_index}")
+                quantized = aq_handlers[sublayer_name].quantize(args=args, verbose=True)
 
                 if save:
                     quantized.name = sublayer_name
-                    full_path = save + "/" + str(i) + "/"
+                    full_path = save + "/" + str(layer_index) + "/"
                     os.makedirs(full_path, exist_ok=True)
                     print("Saved params:", quantized.init_params)
                     torch.save((quantized.state_dict(), quantized.init_params), full_path + sublayer_name)
@@ -204,24 +200,18 @@ def quantize_aq(model, dataloader, args, device):
                     aq_handlers[sublayer_name].layer.weight.data = quantized().to(
                         aq_handlers[sublayer_name].layer.weight.data.dtype)
 
-                weight_avg_bits = calc_avg_bits(
-                    num_codebooks=quantized.num_codebooks, nbits_per_codebook=quantized.nbits_per_codebook,
-                    out_group_size=quantized.out_group_size, in_group_size=quantized.in_group_size,
-                    in_features=aq_handlers[sublayer_name].layer.in_features,
-                    out_features=aq_handlers[sublayer_name].layer.out_features,
-                    scale_nbits=quantized.scale_nbits
-                )
+                weight_avg_bits = quantized.estimate_nbits_per_parameter()
                 overall_bits += int(weight_avg_bits * torch.numel(aq_handlers[sublayer_name].layer.weight.data))
                 model_number_of_params += torch.numel(aq_handlers[sublayer_name].layer.weight.data)
                 print("curent_avg_bits", overall_bits / model_number_of_params)
-                quantizers["model.layers.%d.%s" % (i, sublayer_name)] = ()  # to be updated
+                quantizers["model.layers.%d.%s" % (layer_index, sublayer_name)] = ()  # to be updated
 
         out_losses = []
-        for j in trange(args.nsamples, desc="calc outs after quantization", leave=False):
-            outs_batch = layer(inps[j].to(layer_dev).unsqueeze(0), **forward_args)[0]
+        for j in trange(len(inps), desc="calc outs after quantization", leave=False):
+            outs_batch = layer(inps[j].to(layer_device).unsqueeze(0), **forward_args)[0]
             if not args.skip_out_loss:
                 outs_batch_loss = (
-                    (outs_batch - outs[j].to(layer_dev))
+                    (outs_batch - outs[j].to(layer_device))
                     .float()
                     .square()
                     .view(outs_batch.shape[0], -1)
@@ -230,12 +220,10 @@ def quantize_aq(model, dataloader, args, device):
                 )
                 outs_batch_loss /= outs_batch.view(outs_batch.shape[0], -1).float().std(dim=1)
                 out_losses.append(outs_batch_loss.item())
-            outs[j] = outs_batch
-            if args.offload_activations:
-                outs[j] = outs[j].cpu()
+            outs[j].copy_(outs_batch.reshape_as(outs[j]), non_blocking=True)
         del outs_batch
 
-        layers[i] = layer.to(layer_dev_original)
+        layers[layer_index] = layer.to(layer_device_original)
         del layer
         del aq_handlers
         torch.cuda.empty_cache()
@@ -245,10 +233,10 @@ def quantize_aq(model, dataloader, args, device):
         # Logging
         stats_payload["layer_time"] = time.time() - start_time
         stats_payload["out_loss"] = torch.mean(torch.Tensor(out_losses)).item()
-        stats_payload["Step"] = i
+        stats_payload["Step"] = layer_index
         if args.wandb:
-            wandb.log({"out_loss": stats_payload["out_loss"]}, step=i)
-            wandb.log({"layer_time": stats_payload["layer_time"]}, step=i)
+            wandb.log({"out_loss": stats_payload["out_loss"]}, step=layer_index)
+            wandb.log({"layer_time": stats_payload["layer_time"]}, step=layer_index)
         print(stats_payload)
 
     print("=====================\nFinal stats:")
@@ -272,7 +260,7 @@ def quantize_aq(model, dataloader, args, device):
 
 
 @torch.no_grad()
-def perplexity_eval(model, testenc, args, dev):
+def perplexity_eval(model, testenc, args, device):
     print(f"\nEvaluating perplexity for {args.dataset_name} dataset ...")
 
     nsamples = testenc.numel() // model.seqlen
@@ -281,31 +269,29 @@ def perplexity_eval(model, testenc, args, dev):
     model.config.use_cache = False
 
     inps, forward_args = get_inps(
-        model, testenc, args, dev="cpu" if args.offload_activations else dev, nsamples=nsamples
+        model, testenc, args, device="cpu" if args.offload_activations else device, nsamples=nsamples
     )
     outs = torch.zeros_like(inps)
     for k, v in forward_args.items():
-        forward_args[k] = v.to(dev) if isinstance(v, torch.Tensor) else v
+        forward_args[k] = v.to(device) if isinstance(v, torch.Tensor) else v
 
     layers = get_layers(model)
     for i in trange(len(layers), desc="processing eval data by layer"):
-        layer = layers[i].to(dev)
+        layer = layers[i].to(device)
 
         for j in range(nsamples):
-            outs[j] = layer(inps[j].to(dev).unsqueeze(0), **forward_args)[0]
-            if args.offload_activations:
-                outs[j] = outs[j].cpu()
+            outs[j].copy_(layer(inps[j].to(device).unsqueeze(0), **forward_args)[0].reshape_as(outs[j]), non_blocking=True)
         layers[i] = layer.cpu()
         del layer
         torch.cuda.empty_cache()
         inps, outs = outs, inps
 
-    get_model_head(model).to(dev)
-    testenc = testenc.to(dev)
+    get_model_head(model).to(device)
+    testenc = testenc.to(device)
 
     nlls = []
     for i in range(nsamples):
-        lm_logits = get_lm_logits(inps[i].to(dev), model)
+        lm_logits = get_lm_logits(inps[i].to(device), model)
         shift_logits = lm_logits[:, :-1, :].contiguous()
         shift_labels = testenc[:, (i * model.seqlen): ((i + 1) * model.seqlen)][:, 1:]
         loss_fct = nn.CrossEntropyLoss()
@@ -337,24 +323,20 @@ if __name__ == "__main__":
         "dataset",
         type=str,
         default="none",
-        help="Dataset name [c4, pajama, refinedweb, none, etc.] or path to data where to extract calibration data from.",
-    )
-    parser.add_argument(
-        "--custom_data_path",
-        type=str,
-        default=None,
-        help="Path to load if specified. Deprecated",
+        help="Dataset name [c4, pajama, refinedweb] or path to data where to extract calibration data from.",
     )
     parser.add_argument(
         "--new_eval",
         action="store_true",
         help="if this is set, evaluate on new (and slightly more realistic!) val dataset versions",
     )
-    parser.add_argument("--load", type=str, default=None, help="Path to load quantized statistics.")
-    parser.add_argument("--save", type=str, default=False, help="Path to save quantized statistics.")
-    parser.add_argument("--seed", type=int, default=0, help="Seed for sampling the calibration data.")
     parser.add_argument("--nsamples", type=int, default=None,
                         help="Number of calibration data samples.If None take all calibration data.")
+    parser.add_argument("--load", type=str, default=None, help="Path to load quantized statistics.")
+    parser.add_argument("--save", type=str, default=False, help="Path to save quantized statistics.")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="Seed for calibration data and initialization. "
+                             "Note that the main training is not strictly deterministic.")
     parser.add_argument(
         "--skip_out_loss",
         action="store_true",
@@ -371,15 +353,22 @@ if __name__ == "__main__":
         help="Whether to run in true sequential model.",
     )
     parser.add_argument(
-        "--grouping",
-        action="store_true",
-        help="Whether to run in true sequential model.",
+        "--max_epochs",
+        type=int,
+        default=1000,
+        help="Maximum number of beam search rounds before the optimization is forcibly stopped.",
     )
     parser.add_argument(
-        "--num_epochs",
+        "--relative_mse_tolerance",
+        type=float,
+        default=None,
+        help="Stop training when when (current_epoch_mse / previous_epoch_mse) > (1 - relative_mse_tolerance)",
+    )
+    parser.add_argument(
+        "--steps_per_epoch",
         type=int,
-        default=500,
-        help="Number of epochs.",
+        default=100,
+        help="Run (this many) Adam updates before every beam search round",
     )
     parser.add_argument(
         "--model_seqlen",
@@ -389,16 +378,53 @@ if __name__ == "__main__":
         help="Model seqlen and calibration data context length.",
     )
     parser.add_argument(
+        "--nbits_per_codebook",
+        type=int,
+        default=16,
+        help="each codebook will contain 2 ** nbits_per_codebook vectors",
+    )
+    parser.add_argument(
+        "--scale_nbits",
+        type=int,
+        default=0,
+        help="Number of bits dedicated to the learnable group-wise scale. 0 means do not use group-wise scales "
+             "(still has row-wise scales), 1-15 means using per-group scales quantized to this many bits, "
+             "16+ means use per-group scales but do not quantize them"
+    )
+    parser.add_argument(
+        "--codebook_value_nbits",
+        type=int,
+        default=16,
+        help="If below 16, quantize the values in each codebook with the specified number of bits"
+    )
+    parser.add_argument(
+        "--codebook_value_num_groups",
+        type=int,
+        default=1,
+        help="Split codebook vectors into this many groups for quantizations. Only used when quantized codebooks."
+    )
+    parser.add_argument(
         "--init_max_iter",
         type=int,
         default=100,
-        help="Number of iterations used for k-means initializer",
+        help="Number of K-Means iterations used to initialize codebooks and codes",
+    )
+    parser.add_argument(
+        "--use_faiss",
+        action="store_true",
+        help="Whether to use faiss.Kmeans when initializing codebooks and codes",
+    )
+    parser.add_argument(
+        "--max_points_per_centroid",
+        type=int,
+        default=None,
+        help="During K-means initialzation, sample (this_many * 2 ^ nbits_per_codebook) points for training K-means",
     )
     parser.add_argument(
         "--lr",
         type=float,
         default=1e-4,
-        help="learning rate for Adam optimizer",
+        help="Learning rate for Adam optimizer",
     )
     parser.add_argument(
         "--num_codebooks",
@@ -410,13 +436,13 @@ if __name__ == "__main__":
         "--out_group_size",
         type=int,
         default=1,
-        help="how many output units are quantized together",
+        help="How many output units are quantized together",
     )
     parser.add_argument(
         "--in_group_size",
         type=int,
         default=8,
-        help="how many input features are quantized together",
+        help="How many input features are quantized together",
     )
     parser.add_argument(
         "--beam_size",
@@ -425,42 +451,10 @@ if __name__ == "__main__":
         help="Keep top-(this_many) best candidates for each codebook when finding optimal codes",
     )
     parser.add_argument(
-        "--nbits_per_codebook",
-        type=int,
-        default=16,
-        help="each codebook will contain 2 ** nbits_per_codebook vectors",
-    )
-
-    parser.add_argument(
-        "--scale_nbits",
-        type=int,
-        default=0,
-        help="Number of bits dedicated to the learnable group-wise scale. 0 means do not use group-wise scales "
-             "(still has row-wise scales), 1-15 means using per-group scales quantized to this many bits, "
-             "16+ means use per-group scales but do not quantize them"
-    )
-    parser.add_argument(
-        "--beam_search_epochs",
-        type=int,
-        default=100,
-        help="Run beam search every (this many) Adam updates. Should be removed if we implement fast least squares",
-    )
-    parser.add_argument(
         "--sparsity_regularizer",
         type=int,
         default=0,
         help="An (optional) regularizer that promotes sparsity. Subtracted from loss for each zero code (index)",
-    )
-    parser.add_argument(
-        "--use_faiss",
-        action="store_true",
-        help="Whether to use faiss when initializing codebooks by kmeans.",
-    )
-    parser.add_argument(
-        "--max_points_per_centroid",
-        type=int,
-        default=10**9,
-        help="Maximum data point per cluster in Kmeans",
     )
     parser.add_argument(
         "--print_frequency",
@@ -484,7 +478,19 @@ if __name__ == "__main__":
     )
     parser.add_argument("--wandb", action="store_true", help="Whether to use wandb or store locally.")
 
+
+    torch.set_num_threads(16)
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     args = parser.parse_args()
+    if args.devices is None:
+        args.devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
+    else:
+        args.devices = [torch.device(device_str) for device_str in range(args.devices)]
+    assert all(isinstance(device, torch.device) for device in args.devices)
 
     if args.wandb:
         assert has_wandb, "`wandb` not installed, try pip install `wandb`"
@@ -494,9 +500,13 @@ if __name__ == "__main__":
                 + f"_out_group_size_{args.out_group_size}"
                 + f"_in_group_size_{args.in_group_size}"
                 + f"_nbits_per_codebook_{args.nbits_per_codebook}"
+                + f"_codebook_value_nbits_{args.codebook_value_nbits}"
+                + f"_codebook_value_num_groups_{args.codebook_value_num_groups}"
                 + f"_scale_nbits_{args.scale_nbits}"
-                + f"_beam_search_epochs_{args.beam_search_epochs}"
+                + f"_steps_per_epoch_{args.steps_per_epoch}"
                 + f"_init_max_iter{args.init_max_iter}"
+                + f"_{len(args.devices)}gpus"
+
         )
         args.group_size = args.in_group_size * args.out_group_size
 
@@ -509,15 +519,6 @@ if __name__ == "__main__":
             entity=os.environ.get("WANDB_ENTITY", "rock-and-roll"),
             save_code=True,
         )
-
-    torch.set_num_threads(16)
-    torch.backends.cudnn.allow_tf32 = False
-    torch.backends.cuda.matmul.allow_tf32 = False
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    if args.devices is None:
-        args.devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
 
     print("\n============ Load model... ============")
     model = get_model(args.model_path, args.load, args.dtype, args.model_seqlen).train(False)
