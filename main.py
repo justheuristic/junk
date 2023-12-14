@@ -290,7 +290,6 @@ def perplexity_eval(model, testenc, args):
     model.config.use_cache = use_cache
 
 
-
 @torch.no_grad()
 def init_aq_engines(layer: nn.Module, names: Sequence[str],
                     inps_tensor: torch.Tensor, outs_tensor: torch.Tensor, **forward_args: Dict[str, Any]
@@ -314,23 +313,34 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
         aq_handlers[sublayer_name] = AQUtil(subset[sublayer_name])
     layer_device = next(iter(aq_handlers.values())).device
 
-    def add_batch(name):
-        def tmp(_, inp, out):
-            aq_handlers[name].add_batch(inp[0].data)  # noqa: F821
-        return tmp
+    # wrap all quantized sub-layers with a wrapper that accumulates inputs on forward
+    # note: the code below uses wrappers instead of hooks because hooks cause bugs in multi-gpu code
+    wrapped_layer_to_hander = {aq_handler.layer: aq_handler for aq_handler in aq_handlers.values()}
+    for module in layer.modules():
+        for child_name, child in module.children():
+            if child in wrapped_layer_to_hander:
+                setattr(module, child_name, _LayerWrapperThatAccumulatesXTX(child, wrapped_layer_to_hander[child]))
 
-    handles = []
-    for sublayer_name in aq_handlers.keys():
-        handles.append(subset[sublayer_name].register_forward_hook(add_batch(sublayer_name)))
-        print(f"HANDLES of {sublayer_name} : id = {id(subset[sublayer_name]._forward_hooks)}, len = {len(subset[sublayer_name]._forward_hooks)}")
-    raise ValueError()
+    # compute output activations and accumulate XTX
     for j in trange(len(inps_tensor), desc="calc outs before quantization", leave=False):
         outs_tensor[j].copy_(
             layer(inps_tensor[j].to(layer_device).unsqueeze(0), **forward_args
                   )[0].view_as(outs_tensor[j]), non_blocking=True)
-    for h in handles:
-        h.remove()
+
+    # remove wrappers
+    for module in layer.modules():
+        for child_name, child in module.children():
+            if isinstance(child, _LayerWrapperThatAccumulatesXTX):
+                setattr(module, child_name, child.wrapped_layer)
     return aq_handlers
+
+class _LayerWrapperThatAccumulatesXTX(nn.Module):
+    def __init__(self, layer: nn.Module, aq_handler: AQUtil):
+        super().__init__()
+        self.wrapped_layer, self.aq_handler = layer, aq_handler
+    def forward(self, input, *args, **kwargs):
+        self.aq_handler.add_batch(input)
+        return self.wrapped_layer(input, *args, **kwargs)
 
 @torch.no_grad()
 def init_aq_engines_parallel(devices: Sequence[torch.device], layer: nn.Module, names: Sequence[str],

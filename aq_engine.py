@@ -24,6 +24,7 @@ class AQUtil(nn.Module):
         self.quantized_weight: Optional[QuantizedWeight] = None
         self.nsamples = 0
 
+    @torch.no_grad()
     def add_batch(self, inp: torch.Tensor):
         """Accumulate a minibatch of layer inputs and update the hessian (aka X.T @ X)"""
         assert self.XTX is not None, "Already ran quantization; cannot add more data batches"
@@ -38,6 +39,7 @@ class AQUtil(nn.Module):
         self.nsamples += tmp
         inp = math.sqrt(2 / self.nsamples) * inp.float()
         self.XTX += inp.matmul(inp.t())
+
     @torch.enable_grad()
     def quantize(
         self,
