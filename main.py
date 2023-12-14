@@ -271,10 +271,13 @@ def perplexity_eval(model, testenc, args):
 
     get_model_head(model).to(device)
     testenc = testenc.to(device)
+    nsamples_per_device = len(inps[0])
+    assert len(set(map(len, inps)))[:-1] == 1 and len(inps[-1]) <= len(inps[0])
 
     nlls = []
     for i in range(nsamples):
-        lm_logits = get_lm_logits(inps[i].to(device), model)
+        inp = inps[i // nsamples_per_device][i % nsamples_per_device].to(args.devices[0], non_blocking=True)
+        lm_logits = get_lm_logits(inp.to(device), model)
         shift_logits = lm_logits[:, :-1, :].contiguous()
         shift_labels = testenc[:, (i * model.seqlen): ((i + 1) * model.seqlen)][:, 1:]
         loss_fct = nn.CrossEntropyLoss()
