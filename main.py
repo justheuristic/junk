@@ -347,6 +347,7 @@ def init_aq_engines_parallel(devices: Sequence[torch.device], layer: nn.Module, 
                              inps: Sequence[torch.Tensor], outs: Sequence[torch.Tensor], **forward_args):
     """Parallel version of init_aq_engines; works on lists of input/output tensors"""
     layer_replicas = torch.nn.parallel.replicate(layer, devices=devices, detach=True)
+    layer_replicas[0] = layer  # this ensures that aq_handlers returned by 0-th replica operate on the main layer
     funcs_by_device = [init_aq_engines for _ in devices]
     inputs_by_device = []
     kwargs_by_device = []
