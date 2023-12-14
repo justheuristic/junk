@@ -12,14 +12,6 @@ from src.utils import maybe_script, ellipsis
 
 class QuantizedWeight(nn.Module):
     EPS = 1e-9
-    init_params: Tuple[Tuple[Any, ...], Dict[str, Any]]  # only present if created via create_with_init_params
-
-    @classmethod
-    def create_with_init_params(cls, *args, **kwargs):
-        """Create normally, then save all params passed to init for future serialization"""
-        module = cls(*args, **kwargs)
-        module.init_params = args, kwargs
-        return module
 
     def __init__(self, *,
                  reference_weight: torch.Tensor,

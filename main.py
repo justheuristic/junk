@@ -185,7 +185,7 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
                     full_path = save + "/" + str(layer_index) + "/"
                     os.makedirs(full_path, exist_ok=True)
                     print("Saved params:", quantized.init_params)
-                    torch.save((quantized.state_dict(), quantized.init_params), full_path + sublayer_name)
+                    torch.save(quantized, full_path + sublayer_name)
 
                 with torch.no_grad():
                     assert aq_handlers[sublayer_name].layer.weight in set(layer.parameters())

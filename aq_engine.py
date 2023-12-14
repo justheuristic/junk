@@ -50,7 +50,7 @@ class AQUtil(nn.Module):
         """ create a QuantizedWeight based on the collected hessian (XTX) data"""
         assert isinstance(args.devices, (list, tuple)) and len(args.devices) >= 1, f"Found devices = {args.devices}"
         assert args.devices[0] == self.device, (args.devices[0], self.XTX.device)
-        self.quantized_weight = QuantizedWeight.create_with_init_params(
+        self.quantized_weight = QuantizedWeight(
             reference_weight=self.layer.weight.detach().to(self.device).float(),
             out_group_size=args.out_group_size,
             in_group_size=args.in_group_size,
