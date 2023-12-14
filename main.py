@@ -316,8 +316,8 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
     # wrap all quantized sub-layers with a wrapper that accumulates inputs on forward
     # note: the code below uses wrappers instead of hooks because hooks cause bugs in multi-gpu code
     wrapped_layer_to_hander = {aq_handler.layer: aq_handler for aq_handler in aq_handlers.values()}
-    for module in layer.modules():
-        for child_name, child in module.children():
+    for module in list(layer.modules()):
+        for child_name, child in list(module.named_children()):
             if child in wrapped_layer_to_hander:
                 setattr(module, child_name, _LayerWrapperThatAccumulatesXTX(child, wrapped_layer_to_hander[child]))
 
@@ -328,8 +328,8 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
                   )[0].view_as(outs_tensor[j]), non_blocking=True)
 
     # remove wrappers
-    for module in layer.modules():
-        for child_name, child in module.children():
+    for module in list(layer.modules()):
+        for child_name, child in list(module.named_children()):
             if isinstance(child, _LayerWrapperThatAccumulatesXTX):
                 setattr(module, child_name, child.wrapped_layer)
     return aq_handlers
