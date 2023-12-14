@@ -37,11 +37,7 @@ class AQUtil(nn.Module):
         self.XTX *= self.nsamples / (self.nsamples + tmp)
         self.nsamples += tmp
         inp = math.sqrt(2 / self.nsamples) * inp.float()
-        print(end=f"XTX.device={self.XTX.device}|inp.device={inp.device}\n\n")
-        try:
-            self.XTX += inp.matmul(inp.t())
-        except:
-            pass
+        self.XTX += inp.matmul(inp.t())
     @torch.enable_grad()
     def quantize(
         self,
