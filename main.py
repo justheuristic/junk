@@ -42,7 +42,7 @@ def quantize_model(model, args, device):
         model_path=args.model_path,
         seqlen=model.seqlen,
     )
-    results = quantize_aq(model, dataloader, args, device)
+    results = quantize_aq(model, dataloader, args)
     print(f"quantization time: {time.time() - tick:.1f}")
     return results
 
@@ -240,7 +240,7 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
 
 
 @torch.no_grad()
-def perplexity_eval(model, testenc, args, device):
+def perplexity_eval(model, testenc, args):
     print(f"\nEvaluating perplexity for {args.dataset_name} dataset ...")
 
     nsamples = testenc.numel() // model.seqlen
@@ -249,7 +249,8 @@ def perplexity_eval(model, testenc, args, device):
     model.config.use_cache = False
 
     inps, forward_args = get_inps(model, testenc, args, nsamples=nsamples)
-    outs = torch.zeros_like(inps)
+    outs = [torch.zeros_like(inp_tensor) for inp_tensor in inps]
+    device = args.devices[0]
     for k, v in forward_args.items():
         forward_args[k] = v.to(device) if isinstance(v, torch.Tensor) else v
 
