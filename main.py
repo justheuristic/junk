@@ -251,8 +251,6 @@ def perplexity_eval(model, testenc, args):
     model.config.use_cache = False
 
     inps, forward_args = get_inps(model, testenc, args, nsamples=nsamples)
-    print('!' * 999)
-    print([x.device for x in inps])
     outs = [torch.zeros_like(inp_tensor) for inp_tensor in inps]
     device = args.devices[0]
     for k, v in forward_args.items():
@@ -309,13 +307,13 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
     :param forward_args: additional keyword arguments, e.g. attention mask
     :returns: a dictionary where keys are full layer names and values are AQUtil instances ready to run .quantize
     """
+    device = torch.device(f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else 'cpu')
     all_sublayers = find_sublayers(layer)
     subset = {name: all_sublayers[name] for name in names}
     assert len(subset) > 0
     aq_handlers = {}
     for sublayer_name in subset:
         aq_handlers[sublayer_name] = AQUtil(subset[sublayer_name])
-    layer_device = next(iter(aq_handlers.values())).device
 
     # wrap all quantized sub-layers with a wrapper that accumulates inputs on forward
     # note: the code below uses wrappers instead of hooks because hooks cause bugs in multi-gpu code
@@ -387,12 +385,13 @@ def update_outs(
     :param forward_args: additional keyword arguments, e.g. attention mask
     :returns: a list of mean squared errors for each sequence
     """
+    device = torch.device(f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else 'cpu')
     out_losses = []
     for j in trange(len(inps_tensor), desc="calc outs after quantization", leave=False):
-        outs_batch = layer(inps_tensor[j].to(args.devices[0]).unsqueeze(0), **forward_args)[0]
+        outs_batch = layer(inps_tensor[j].to(device).unsqueeze(0), **forward_args)[0]
         if compute_mse:
             outs_batch_loss = (
-                (outs_batch - outs_tensor[j].to(args.devices[0]))
+                (outs_batch - outs_tensor[j].to(device))
                 .float()
                 .square()
                 .view(outs_batch.shape[0], -1)
