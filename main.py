@@ -314,6 +314,8 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
         aq_handlers[sublayer_name] = AQUtil(subset[sublayer_name])
     layer_device = next(iter(aq_handlers.values())).device
 
+    print(end=f"MY_DEVICE{layer_device}  inp_device{inps_tensor.device}\n")
+
     def add_batch(name):
         def tmp(_, inp, out):
             aq_handlers[name].add_batch(inp[0].data)  # noqa: F821
@@ -334,9 +336,6 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
 def init_aq_engines_parallel(devices: Sequence[torch.device], layer: nn.Module, names: Sequence[str],
                              inps: Sequence[torch.Tensor], outs: Sequence[torch.Tensor], **forward_args):
     """Parallel version of init_aq_engines; works on lists of input/output tensors"""
-    print('!' * 100)
-    print('inps devices:', [x.device for x in inps])
-    print('outs devices:', [x.device for x in outs])
     layer_replicas = torch.nn.parallel.replicate(layer, devices=devices, detach=True)
     funcs_by_device = [init_aq_engines for _ in devices]
     inputs_by_device = []
