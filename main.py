@@ -202,7 +202,8 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
             assert len(inps) == len(outs) == 1
             out_losses = update_outs(layer, inps[0], outs[0], compute_mse=not args.skip_out_loss, **forward_args)
         else:
-            out_losses = update_outs_parallel(layer, inps, outs, compute_mse=not args.skip_out_loss, **forward_args)
+            out_losses = update_outs_parallel(
+                args.devices, layer, inps, outs, compute_mse=not args.skip_out_loss, **forward_args)
 
         layers[layer_index] = layer.to(layer_device_original)
         del layer
@@ -262,7 +263,7 @@ def perplexity_eval(model, testenc, args):
             assert len(inps) == len(outs) == 1
             update_outs(layer, inps[0], outs[0], compute_mse=False, **forward_args)
         else:
-            update_outs_parallel(layer, inps, outs, compute_mse=False, **forward_args)
+            update_outs_parallel(args.devices, layer, inps, outs, compute_mse=False, **forward_args)
         layers[i] = layer.cpu()
         del layer
         torch.cuda.empty_cache()
