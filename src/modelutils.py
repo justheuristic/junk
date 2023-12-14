@@ -147,8 +147,8 @@ def get_sequential_groups(model):
         raise ValueError(MODEL_ERROR_MSG.format(model.config.model_type))
 
 
-def read_quant_weight_from_file(load_path, block_i, layer_name):
-    return torch.load(load_path + "/" + str(block_i) + "/" + layer_name)
+def read_quant_weight_from_file(load_path, block_i, layer_name, device):
+    return torch.load(load_path + "/" + str(block_i) + "/" + layer_name, map_location=device)
 
 
 def load_quantized_model(model, load_path):
@@ -157,11 +157,9 @@ def load_quantized_model(model, load_path):
         layer = layers[i]
         sub_layers = find_sublayers(layer)
         for name in sub_layers:
-            state_dict, (init_args, init_kwargs) = read_quant_weight_from_file(load_path, i, name)
-            quantized_weight = QuantizedWeight(*init_args, **init_kwargs)
-            quantized_weight.load_state_dict(state_dict)
+            quantized_weight = read_quant_weight_from_file(load_path, i, name, device=sub_layers[name].weight.device)
             with torch.no_grad():
-                sub_layers[name].weight = quantized_weight()
+                sub_layers[name].weight.data = quantized_weight().to(sub_layers[name].weight.data.dtype)
         layers[i] = layer
     model.load_state_dict(torch.load(load_path + "/not_quantized_weights.pt"), strict=False)
     return model
