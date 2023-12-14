@@ -313,6 +313,7 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
     for sublayer_name in subset:
         aq_handlers[sublayer_name] = AQUtil(subset[sublayer_name])
 
+    print('!!', layer)
     layer_device = next(layer.parameters()).device
     def add_batch(name):
         def tmp(_, inp, out):
