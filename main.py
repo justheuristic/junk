@@ -322,7 +322,7 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
     handles = []
     for sublayer_name in aq_handlers.keys():
         handles.append(subset[sublayer_name].register_forward_hook(add_batch(sublayer_name)))
-        print("HANDLES:", subset[sublayer_name]._forward_hooks)
+        print(f"HANDLES of {sublayer_name} : id = {id(subset[sublayer_name]._forward_hooks)}, len = {len(subset[sublayer_name]._forward_hooks)}")
     raise ValueError()
     for j in trange(len(inps_tensor), desc="calc outs before quantization", leave=False):
         outs_tensor[j].copy_(
