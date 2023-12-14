@@ -334,6 +334,9 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
 def init_aq_engines_parallel(devices: Sequence[torch.device], layer: nn.Module, names: Sequence[str],
                              inps: Sequence[torch.Tensor], outs: Sequence[torch.Tensor], **forward_args):
     """Parallel version of init_aq_engines; works on lists of input/output tensors"""
+    print('!' * 100)
+    print('inps devices:', [x.device for x in inps])
+    print('outs devices:', [x.device for x in outs])
     layer_replicas = torch.nn.parallel.replicate(layer, devices=devices, detach=True)
     funcs_by_device = [init_aq_engines for _ in devices]
     inputs_by_device = []
