@@ -1,13 +1,17 @@
 import os
 import time
+from itertools import chain
+from typing import Optional, Iterable, Sequence, Dict, Any
+from argparse import Namespace
 
 import torch
 import torch.nn as nn
 from tqdm import trange
 from tqdm.auto import trange
+from transformers import PreTrainedModel
 
 from aq_engine import AQUtil
-from src.datautils import get_loaders, set_seed
+from src.datautils import get_loaders
 from src.modelutils import (
     FALCON_TYPES,
     find_sublayers,
@@ -38,19 +42,25 @@ def quantize_model(model, args, device):
         model_path=args.model_path,
         seqlen=model.seqlen,
     )
-    results = quantize_aq(model, dataloader, args, device)
+    results = quantize_aq(model, dataloader, args)
     print(f"quantization time: {time.time() - tick:.1f}")
     return results
 
 
 @torch.no_grad()
-def get_inps(model, data_iterable, args, device, nsamples=None):
-    """mocks model launch to collect inputs to the first model layer"""
+def get_inps(model: PreTrainedModel, data_iterable: Iterable, args: Namespace, nsamples: Optional[int] = None
+             ) -> Sequence[torch.Tensor]:
+    """
+    mocks model launch to collect inputs to the first model layer
+    :returns: a list of torch tensors with activations for each device in args.devices.
+    Each tensor has shape [nsample_per_device, seq_len, hid_size]
+    """
     print("catching layer inputs from data", flush=True)
 
     layers = get_layers(model)
 
     nsamples = nsamples or args.nsamples or len(data_iterable)
+    device = args.devices[0] if not args.offload_activations else torch.device("cpu")
     assert nsamples is not None
 
     if isinstance(data_iterable, torch.Tensor):
@@ -76,8 +86,12 @@ def get_inps(model, data_iterable, args, device, nsamples=None):
     layers[0] = layers[0].to(device)
 
     dtype = next(iter(model.parameters())).dtype
-    inps = torch.zeros((nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=device)
-
+    nsamples_per_device = (nsamples - 1) // len(args.devices) + 1
+    inps = [torch.zeros(
+        (min(nsamples_per_device, nsamples - i * nsamples_per_device), model.seqlen, model.config.hidden_size),
+        dtype=dtype, device=args.devices[i] if not args.offload_activations else "cpu")
+        for i in range(len(args.devices))
+    ]
     forward_arg_names = [
         "attention_mask",
     ]
@@ -92,7 +106,7 @@ def get_inps(model, data_iterable, args, device, nsamples=None):
             self.module = module
 
         def forward(self, inp, **kwargs):
-            inps[cache["i"]] = inp
+            inps[cache["i"] // nsamples_per_device][cache["i"] % nsamples_per_device] = inp
             cache["i"] += 1
             for forward_arg_name in forward_arg_names:
                 cache[forward_arg_name] = kwargs.get(forward_arg_name)
@@ -121,15 +135,15 @@ def get_inps(model, data_iterable, args, device, nsamples=None):
     torch.cuda.empty_cache()
 
     forward_args = {k: cache[k] for k in forward_arg_names}
+    assert cache["i"] == nsamples
     return inps, forward_args
 
 
 @torch.no_grad()
-def quantize_aq(model, dataloader, args, device):
+def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
     print("\nStarting AQ quantization ...")
-
-    inps, forward_args = get_inps(model, dataloader, args, device="cpu" if args.offload_activations else device)
-    outs = torch.zeros_like(inps)
+    inps, forward_args = get_inps(model, dataloader, args)
+    outs = [torch.zeros_like(inp_tensor) for inp_tensor in inps]
 
     use_cache = model.config.use_cache
     model.config.use_cache = False
@@ -146,46 +160,23 @@ def quantize_aq(model, dataloader, args, device):
 
         layer_device_original = next(layers[layer_index].parameters()).device  # quantized layer will return there
         print(f"{layer_device_original=}")
-        if layer_device_original.type != "cuda":
-            layer = layers[layer_index].to(device)
-        else:
-            layer = layers[layer_index]
-        layer_device = next(layers[layer_index].parameters()).device
-        all_sublayers = find_sublayers(layer)
-
+        layer = layers[layer_index].to(args.devices[0])
         for k, v in forward_args.items():
-            forward_args[k] = v.to(layer_device) if isinstance(v, torch.Tensor) else v
+            forward_args[k] = v.to(args.devices[0]) if isinstance(v, torch.Tensor) else v
 
         if args.true_sequential:
             sequential = get_sequential_groups(model)
         else:
-            sequential = [list(all_sublayers.keys())]
+            sequential = [list(find_sublayers(layer).keys())]
 
         for names in sequential:
-            subset = {n: all_sublayers[n] for n in names}
+            if len(args.devices) == 1:
+                assert len(inps) == len(outs) == 1  # number of per-device inputs/outputs
+                aq_handlers = init_aq_engines(layer, names, inps[0], outs[0], **forward_args)
+            else:
+                aq_handlers = init_aq_engines_parallel(args.devices, layer, names, inps, outs, **forward_args)
 
-            aq_handlers = {}
-            for sublayer_name in subset:
-                aq_handlers[sublayer_name] = AQUtil(subset[sublayer_name])
-
-            def add_batch(name):
-                def tmp(_, inp, out):
-                    aq_handlers[name].add_batch(inp[0].data)  # noqa: F821
-
-                return tmp
-
-            handles = []
-            for sublayer_name in subset:
-                handles.append(subset[sublayer_name].register_forward_hook(add_batch(sublayer_name)))
-            for j in trange(len(inps), desc="calc outs before quantization", leave=False):
-                outs[j].copy_(layer(inps[j].to(layer_device).unsqueeze(0), **forward_args)[0].view_as(outs[j]),
-                              non_blocking=True)
-            for h in handles:
-                h.remove()
-
-            torch.cuda.empty_cache()
-
-            for sublayer_name in subset:
+            for sublayer_name in aq_handlers.keys():
                 print(f"Quantizing module {sublayer_name} of layer {layer_index}")
                 quantized = aq_handlers[sublayer_name].quantize(args=args, verbose=True)
 
@@ -197,6 +188,7 @@ def quantize_aq(model, dataloader, args, device):
                     torch.save((quantized.state_dict(), quantized.init_params), full_path + sublayer_name)
 
                 with torch.no_grad():
+                    assert aq_handlers[sublayer_name].layer.weight in set(layer.parameters())
                     aq_handlers[sublayer_name].layer.weight.data = quantized().to(
                         aq_handlers[sublayer_name].layer.weight.data.dtype)
 
@@ -206,22 +198,12 @@ def quantize_aq(model, dataloader, args, device):
                 print("curent_avg_bits", overall_bits / model_number_of_params)
                 quantizers["model.layers.%d.%s" % (layer_index, sublayer_name)] = ()  # to be updated
 
-        out_losses = []
-        for j in trange(len(inps), desc="calc outs after quantization", leave=False):
-            outs_batch = layer(inps[j].to(layer_device).unsqueeze(0), **forward_args)[0]
-            if not args.skip_out_loss:
-                outs_batch_loss = (
-                    (outs_batch - outs[j].to(layer_device))
-                    .float()
-                    .square()
-                    .view(outs_batch.shape[0], -1)
-                    .mean(dim=1)
-                    .sqrt()
-                )
-                outs_batch_loss /= outs_batch.view(outs_batch.shape[0], -1).float().std(dim=1)
-                out_losses.append(outs_batch_loss.item())
-            outs[j].copy_(outs_batch.reshape_as(outs[j]), non_blocking=True)
-        del outs_batch
+        if len(args.devices) == 1:
+            assert len(inps) == len(outs) == 1
+            out_losses = update_outs(layer, inps[0], outs[0], compute_mse=not args.skip_out_loss, **forward_args)
+        else:
+            out_losses = update_outs_parallel(
+                args.devices, layer, inps, outs, compute_mse=not args.skip_out_loss, **forward_args)
 
         layers[layer_index] = layer.to(layer_device_original)
         del layer
@@ -260,7 +242,7 @@ def quantize_aq(model, dataloader, args, device):
 
 
 @torch.no_grad()
-def perplexity_eval(model, testenc, args, device):
+def perplexity_eval(model, testenc, args):
     print(f"\nEvaluating perplexity for {args.dataset_name} dataset ...")
 
     nsamples = testenc.numel() // model.seqlen
@@ -268,19 +250,20 @@ def perplexity_eval(model, testenc, args, device):
     use_cache = model.config.use_cache
     model.config.use_cache = False
 
-    inps, forward_args = get_inps(
-        model, testenc, args, device="cpu" if args.offload_activations else device, nsamples=nsamples
-    )
-    outs = torch.zeros_like(inps)
+    inps, forward_args = get_inps(model, testenc, args, nsamples=nsamples)
+    outs = [torch.zeros_like(inp_tensor) for inp_tensor in inps]
+    device = args.devices[0]
     for k, v in forward_args.items():
         forward_args[k] = v.to(device) if isinstance(v, torch.Tensor) else v
 
     layers = get_layers(model)
     for i in trange(len(layers), desc="processing eval data by layer"):
         layer = layers[i].to(device)
-
-        for j in range(nsamples):
-            outs[j].copy_(layer(inps[j].to(device).unsqueeze(0), **forward_args)[0].reshape_as(outs[j]), non_blocking=True)
+        if len(args.devices) == 1:
+            assert len(inps) == len(outs) == 1
+            update_outs(layer, inps[0], outs[0], compute_mse=False, **forward_args)
+        else:
+            update_outs_parallel(args.devices, layer, inps, outs, compute_mse=False, **forward_args)
         layers[i] = layer.cpu()
         del layer
         torch.cuda.empty_cache()
@@ -288,10 +271,13 @@ def perplexity_eval(model, testenc, args, device):
 
     get_model_head(model).to(device)
     testenc = testenc.to(device)
+    nsamples_per_device = len(inps[0])
+    assert len(set(map(len, inps[:-1]))) == 1 and len(inps[-1]) <= len(inps[0])
 
     nlls = []
     for i in range(nsamples):
-        lm_logits = get_lm_logits(inps[i].to(device), model)
+        inp = inps[i // nsamples_per_device][i % nsamples_per_device].to(args.devices[0], non_blocking=True)
+        lm_logits = get_lm_logits(inp.to(device), model)
         shift_logits = lm_logits[:, :-1, :].contiguous()
         shift_labels = testenc[:, (i * model.seqlen): ((i + 1) * model.seqlen)][:, 1:]
         loss_fct = nn.CrossEntropyLoss()
@@ -307,6 +293,136 @@ def perplexity_eval(model, testenc, args, device):
         wandb.log({args.dataset_name: ppl.item()})
 
     model.config.use_cache = use_cache
+
+
+@torch.no_grad()
+def init_aq_engines(layer: nn.Module, names: Sequence[str],
+                    inps_tensor: torch.Tensor, outs_tensor: torch.Tensor, **forward_args: Dict[str, Any]
+                    ) -> Dict[str, AQUtil]:
+    """
+    Create a dictionary of AQUtil instances for each quantized layer;
+    Run forward pass on each sample in inps_tensor; write output activations to outs_tensor (in-plance)
+    Accumulate XTX to each one of aq_handlers
+    :param layer: transformer layer with one or more linear layer to be quantized
+    :param names: a list/tuple of string names for linear sub-layers inside :layer: that shall be quantized
+    :param inps_tensor: a tensor of input activations, [nsamples_per_device, seq_len, hidden_size]
+    :param outs_tensor: a tensor to write output activations into, [nsamples_per_device, seq_len, hidden_size]
+    :param forward_args: additional keyword arguments, e.g. attention mask
+    :returns: a dictionary where keys are full layer names and values are AQUtil instances ready to run .quantize
+    """
+    device = torch.device(f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else 'cpu')
+    all_sublayers = find_sublayers(layer)
+    subset = {name: all_sublayers[name] for name in names}
+    assert len(subset) > 0
+    aq_handlers = {}
+    for sublayer_name in subset:
+        aq_handlers[sublayer_name] = AQUtil(subset[sublayer_name])
+
+    # wrap all quantized sub-layers with a wrapper that accumulates inputs on forward
+    # note: the code below uses wrappers instead of hooks because hooks cause bugs in multi-gpu code
+    wrapped_layer_to_hander = {aq_handler.layer: aq_handler for aq_handler in aq_handlers.values()}
+    for module in list(layer.modules()):
+        for child_name, child in list(module.named_children()):
+            if child in wrapped_layer_to_hander:
+                setattr(module, child_name, _LayerWrapperThatAccumulatesXTX(child, wrapped_layer_to_hander[child]))
+
+    # compute output activations and accumulate XTX
+    for j in trange(len(inps_tensor), desc="calc outs before quantization", leave=False):
+        outs_tensor[j].copy_(
+            layer(inps_tensor[j].to(device).unsqueeze(0), **forward_args
+                  )[0].view_as(outs_tensor[j]), non_blocking=True)
+
+    # remove wrappers
+    for module in list(layer.modules()):
+        for child_name, child in list(module.named_children()):
+            if isinstance(child, _LayerWrapperThatAccumulatesXTX):
+                setattr(module, child_name, child.wrapped_layer)
+    return aq_handlers
+
+class _LayerWrapperThatAccumulatesXTX(nn.Module):
+    def __init__(self, layer: nn.Module, aq_handler: AQUtil):
+        super().__init__()
+        self.wrapped_layer, self.aq_handler = layer, aq_handler
+    def forward(self, input, *args, **kwargs):
+        self.aq_handler.add_batch(input)
+        return self.wrapped_layer(input, *args, **kwargs)
+
+@torch.no_grad()
+def init_aq_engines_parallel(devices: Sequence[torch.device], layer: nn.Module, names: Sequence[str],
+                             inps: Sequence[torch.Tensor], outs: Sequence[torch.Tensor], **forward_args):
+    """Parallel version of init_aq_engines; works on lists of input/output tensors"""
+    layer_replicas = torch.nn.parallel.replicate(layer, devices=devices, detach=True)
+    layer_replicas[0] = layer  # this ensures that aq_handlers returned by 0-th replica operate on the main layer
+    funcs_by_device = [init_aq_engines for _ in devices]
+    inputs_by_device = []
+    kwargs_by_device = []
+    for i in range(len(devices)):
+        inputs_by_device.append((layer_replicas[i], names, inps[i], outs[i]))
+        kwargs_by_device.append({k: (v.to(devices[i], non_blocking=True) if isinstance(v, torch.Tensor) else v)
+                                 for k, v in forward_args.items()})
+    aq_handles_by_device: Sequence[Dict[str, AQUtil]] = torch.nn.parallel.parallel_apply(
+        funcs_by_device, inputs_by_device, kwargs_by_device, devices=devices)
+    aq_handlers = aq_handles_by_device[0]
+    for key, aq_handler in aq_handlers.items():
+        replica_handlers = [device_aq_handlers[key] for device_aq_handlers in aq_handles_by_device]
+        replica_nsamples = [replica_handler.nsamples for replica_handler in replica_handlers]
+        total_nsamples = sum(replica_nsamples)
+        aq_handler.XTX = sum(
+            (replica_handlers[i].XTX * (replica_nsamples[i] / total_nsamples)).to(devices[0], non_blocking=True)
+            for i in range(len(devices)))
+        aq_handler.nsamples = total_nsamples
+    return aq_handlers
+
+
+@torch.no_grad()
+def update_outs(
+        layer: nn.Module, inps_tensor: torch.Tensor, outs_tensor: torch.Tensor, compute_mse: bool, **forward_args
+) -> Sequence[float]:
+    """
+    Update outs_tensor with new activations and optionally compute sample-wise mse loss with previous activations
+    :param layer: transformer layer with one or more linear layer to be quantized
+    :param inps_tensor: a tensor of input activations, [nsamples_per_device, seq_len, hidden_size]
+    :param outs_tensor: a tensor to write output activations into, [nsamples_per_device, seq_len, hidden_size]
+    :note: outs_tensor must contain previous activations with which to compute MSE loss
+    :param compute_mse: if True, return a list of sample-wise mse losses; if False, return an empty sequence
+    :param forward_args: additional keyword arguments, e.g. attention mask
+    :returns: a list of mean squared errors for each sequence
+    """
+    device = torch.device(f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else 'cpu')
+    out_losses = []
+    for j in trange(len(inps_tensor), desc="calc outs after quantization", leave=False):
+        outs_batch = layer(inps_tensor[j].to(device).unsqueeze(0), **forward_args)[0]
+        if compute_mse:
+            outs_batch_loss = (
+                (outs_batch - outs_tensor[j].to(device))
+                .float()
+                .square()
+                .view(outs_batch.shape[0], -1)
+                .mean(dim=1)
+                .sqrt()
+            )
+            outs_batch_loss /= outs_batch.view(outs_batch.shape[0], -1).float().std(dim=1)
+            out_losses.append(outs_batch_loss.item())
+        outs_tensor[j].copy_(outs_batch.reshape_as(outs_tensor[j]), non_blocking=True)
+    return out_losses
+
+
+@torch.no_grad()
+def update_outs_parallel(
+        devices: Sequence[torch.device], layer: nn.Module, inps: Sequence[torch.Tensor], outs: Sequence[torch.Tensor],
+        compute_mse: bool, **forward_args) -> Sequence[float]:
+    """Parallel version of update_outs_and_compute_losses; works on lists of input/output tensors"""
+    layer_replicas = torch.nn.parallel.replicate(layer, devices=devices, detach=True)
+    funcs_by_device = [update_outs for _ in devices]
+    inputs_by_device = []
+    kwargs_by_device = []
+    for i in range(len(devices)):
+        inputs_by_device.append((layer_replicas[i], inps[i], outs[i], compute_mse))
+        kwargs_by_device.append({k: (v.to(devices[i], non_blocking=True) if isinstance(v, torch.Tensor) else v)
+                                 for k, v in forward_args.items()})
+    out_losses_by_device: Sequence[Sequence[float]] = torch.nn.parallel.parallel_apply(
+        funcs_by_device, inputs_by_device, kwargs_by_device, devices=devices)
+    return list(chain(*out_losses_by_device))
 
 
 if __name__ == "__main__":
@@ -541,7 +657,7 @@ if __name__ == "__main__":
             eval_mode=True,
         )
         args.dataset_name = dataset
-        perplexity_eval(model, testloader, args, device)
+        perplexity_eval(model, testloader, args)
 
     print(f"eval: {torch.cuda.max_memory_allocated()=:,}")
     if args.wandb:

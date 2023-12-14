@@ -63,7 +63,7 @@ def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: in
             # note: the above formula equals to - 0.5 || data[:, None, :] - clusters[None, :, :] || ^ 2 + const
 
         if len(devices) == 1:
-            new_clusters = [torch.zeros_like(clusters[0]).index_reduce_(
+            new_clusters = [clusters[0].clone().index_reduce_(
                 dim=0, index=nearest_indices[0], source=data[0], reduce='mean', include_self=False)]
         else:
             cluster_sums = [torch.zeros_like(clusters[gi]).index_add(
@@ -75,7 +75,8 @@ def fit_kmeans(data: torch.Tensor, k: int, max_iter: int = 1000, check_every: in
                 cluster_sums[0] += cluster_sums[gi]
                 cluster_counts[0] += cluster_counts[gi]
 
-            new_clusters = [cluster_sums[0] / cluster_counts[0].unsqueeze(1)]
+            new_clusters = [cluster_sums[0] / cluster_counts[0].unsqueeze(1).clamp_min(1)]
+            new_clusters[0] += (cluster_counts[0].unsqueeze(1) == 0) * clusters[0]
             for gi in range(1, len(devices)):
                 new_clusters.append(new_clusters[0].to(devices[gi], non_blocking=True))
 
