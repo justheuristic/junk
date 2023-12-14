@@ -653,7 +653,7 @@ if __name__ == "__main__":
             eval_mode=True,
         )
         args.dataset_name = dataset
-        perplexity_eval(model, testloader, args, device)
+        perplexity_eval(model, testloader, args)
 
     print(f"eval: {torch.cuda.max_memory_allocated()=:,}")
     if args.wandb:
