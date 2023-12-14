@@ -326,7 +326,7 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
     # compute output activations and accumulate XTX
     for j in trange(len(inps_tensor), desc="calc outs before quantization", leave=False):
         outs_tensor[j].copy_(
-            layer(inps_tensor[j].to(layer_device).unsqueeze(0), **forward_args
+            layer(inps_tensor[j].to(device).unsqueeze(0), **forward_args
                   )[0].view_as(outs_tensor[j]), non_blocking=True)
 
     # remove wrappers
