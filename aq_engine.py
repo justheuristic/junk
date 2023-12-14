@@ -84,6 +84,8 @@ class AQUtil(nn.Module):
                 else:
                     loss = self._compute_mse_parallel(args.devices, replicas, differentiable_parameters)
 
+                if not torch.isfinite(loss).item():
+                    raise ValueError(f"Quantization loss is {loss}")
                 if step == 0 and args.relative_mse_tolerance is not None:
                     if loss.item() / previous_best_loss > (1.0 - args.relative_mse_tolerance):
                         return self.quantized_weight  # early stopping; no updates after last epoch's beam search
