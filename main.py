@@ -184,7 +184,7 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
                     quantized.name = sublayer_name
                     full_path = save + "/" + str(layer_index) + "/"
                     os.makedirs(full_path, exist_ok=True)
-                    print("Saved params:", quantized.init_params)
+                    print("Saving...")
                     torch.save(quantized, full_path + sublayer_name)
 
                 with torch.no_grad():
