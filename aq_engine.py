@@ -80,11 +80,10 @@ class AQUtil(nn.Module):
         for epoch in range(args.max_epochs):
             # train codebooks and scales
             for step in range(args.steps_per_epoch):
-                # if len(args.devices) == 1:
-                #     loss = self._compute_mse()
-                # else:
-                #     loss = self._compute_mse_parallel(args.devices, replicas, differentiable_parameters)
-                loss = self._compute_mse()
+                if len(args.devices) == 1:
+                    loss = self._compute_mse()
+                else:
+                    loss = self._compute_mse_parallel(args.devices, replicas, differentiable_parameters)
 
                 if not torch.isfinite(loss).item():
                     raise ValueError(f"Quantization loss is {loss}")
