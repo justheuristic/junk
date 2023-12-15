@@ -161,7 +161,7 @@ class AQUtil(nn.Module):
                                       selection.stop * self.quantized_weight.out_group_size)
         reference_weight = self.layer.weight.detach()[out_channel_selection].to(dtype)
         return self.quantized_weight.beam_search_update_codes_(
-            self.XTX.to(dtype), reference_weight, selection=selection, **kwargs)
+            self.XTX.to(dtype), reference_weight, selection=selection, **kwargs).clone()
 
     @torch.no_grad()
     def beam_search_update_codes_(self, devices: Sequence[torch.device], replicas: Sequence[AQUtil],
