@@ -55,6 +55,15 @@ def parse_args():
     parser.add_argument("--description_dict_path", default=None)
     parser.add_argument("--check_integrity", action="store_true")
     parser.add_argument("--log_wandb", action="store_true")
+    parser.add_argument(
+        "--model_seqlen",
+        type=int,
+        default=4096,
+        choices=[2048, 4096],
+        help="Model seqlen and calibration data context length.",
+    )
+    parser.add_argument("--load", type=str, default=None, help="Path to load quantized statistics.")
+
 
     return parser.parse_args()
 
@@ -117,14 +126,15 @@ def main():
 
     if args.load:
         lm.model = load_quantized_model(lm.model, args.load)
-        lm.model.seqlen = args.load
-    if quantization_config is not None:
+        lm.model.seqlen = args.model_seqlen
+
+    if quantization_config is not None and args.load is not None:
         assert lm.model.config.model_type in (
             "llama",
             "RefinedWebModel",
         ), "Quantization is implemented only for llama and falcon families"
 
-        lm.model.seqlen = 4096
+        lm.model.seqlen = args.model_seqlen
 
         _, wbits_avg = quantize_model(lm.model, quantization_config, args.device)
         print(f"Average number of bits {wbits_avg:.2f}")
