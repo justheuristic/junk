@@ -272,7 +272,7 @@ def perplexity_eval(model, testenc, args):
     get_model_head(model).to(device)
     testenc = testenc.to(device)
     nsamples_per_device = len(inps[0])
-    assert len(set(map(len, inps[:-1]))) == 1 and len(inps[-1]) <= len(inps[0])
+    assert len(set(map(len, inps[:-1]))) <= 1 and len(inps[-1]) <= len(inps[0])
 
     nlls = []
     for i in range(nsamples):
