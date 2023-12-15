@@ -80,10 +80,11 @@ class AQUtil(nn.Module):
         for epoch in range(args.max_epochs):
             # train codebooks and scales
             for step in range(args.steps_per_epoch):
-                if len(args.devices) == 1:
-                    loss = self._compute_mse()
-                else:
-                    loss = self._compute_mse_parallel(args.devices, replicas, differentiable_parameters)
+                # if len(args.devices) == 1:
+                #     loss = self._compute_mse()
+                # else:
+                #     loss = self._compute_mse_parallel(args.devices, replicas, differentiable_parameters)
+                loss = self._compute_mse()
 
                 if not torch.isfinite(loss).item():
                     raise ValueError(f"Quantization loss is {loss}")
@@ -153,13 +154,14 @@ class AQUtil(nn.Module):
 
     def _substitute_and_beam_search(self, overrides: nn.ParameterDict, selection: slice, **kwargs) -> torch.Tensor:
         """Utility for parallelism: replace the specified parameters of self.quantized_weight, then run beam search"""
+        dtype = self.quantized_weight.codebooks.dtype
         for param_name, param_value in overrides.items():
             replace_parameter_(self.quantized_weight, param_name, param_value)
         out_channel_selection = slice(selection.start * self.quantized_weight.out_group_size,
                                       selection.stop * self.quantized_weight.out_group_size)
-        reference_weight = self.layer.weight.detach()[out_channel_selection].to(self.XTX.dtype)
+        reference_weight = self.layer.weight.detach()[out_channel_selection].to(dtype)
         return self.quantized_weight.beam_search_update_codes_(
-            self.XTX, reference_weight, selection=selection, **kwargs)
+            self.XTX.to(dtype), reference_weight, selection=selection, **kwargs)
 
     @torch.no_grad()
     def beam_search_update_codes_(self, devices: Sequence[torch.device], replicas: Sequence[AQUtil],
@@ -167,8 +169,9 @@ class AQUtil(nn.Module):
         """Update self.quantized_weight.codes in-place via beam search"""
         if len(devices) == 1:  # single device
             assert replicas is None
+            dtype = self.quantized_weight.codebooks.dtype
             self.quantized_weight.beam_search_update_codes_(
-                self.XTX, self.layer.weight.detach().to(self.XTX.dtype), dim_rng=random.Random(seed), **kwargs)
+                self.XTX.to(dtype), self.layer.weight.detach().to(dtype), dim_rng=random.Random(seed), **kwargs)
         else:
             assert replicas[0] is self
             replicated_parameters = torch.nn.parallel.replicate(parameters_to_replicate, devices)
