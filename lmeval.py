@@ -82,11 +82,10 @@ def main():
     args = parse_args()
 
     assert not args.provide_description  # not implemented
-
     if args.log_wandb:
         wandb.init(
             dir=os.getcwd(),
-            name=args.exp_name,
+            name=f"{list(filter(len, args.load.split('/')))[-1]}" if args.load else str(args.quantization_args),
             config={a: getattr(args, a) for a in dir(args) if not a.startswith("_")},
             settings=wandb.Settings(code_dir="."),
             project=os.environ.get("WANDB_PROJECT", f"AQ_LMEVAl_{list(filter(len, args.model_path.split('/')))[-1]}"),
