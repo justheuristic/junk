@@ -88,7 +88,7 @@ def main():
             name=f"{list(filter(len, args.load.split('/')))[-1]}" if args.load else str(args.quantization_args),
             config={a: getattr(args, a) for a in dir(args) if not a.startswith("_")},
             settings=wandb.Settings(code_dir="."),
-            project=os.environ.get("WANDB_PROJECT", f"AQ_LMEVAl_{list(filter(len, args.model_path.split('/')))[-1]}"),
+            project=os.environ.get("WANDB_PROJECT", f"AQ_LMEVAl_{list(filter(len, args.model.split('/')))[-1]}"),
             entity=os.environ.get("WANDB_ENTITY", "rock-and-roll"),
             save_code=True,
         )
