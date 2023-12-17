@@ -593,6 +593,11 @@ if __name__ == "__main__":
         help="dtype to load the model in",
     )
     parser.add_argument("--wandb", action="store_true", help="Whether to use wandb or store locally.")
+    parser.add_argument(
+        "--no_quant",
+        action="store_true",
+        help="Skip model quantization and evalueate the model in it's original dtype",
+    )
 
 
     torch.set_num_threads(16)
@@ -639,7 +644,7 @@ if __name__ == "__main__":
     print("\n============ Load model... ============")
     model = get_model(args.model_path, args.load, args.dtype, args.model_seqlen).train(False)
     
-    if not args.load:
+    if not args.load and not args.no_quant:
         print("\n============ Quantizing model... ============")
         quantize_model(model, args, device)
 
