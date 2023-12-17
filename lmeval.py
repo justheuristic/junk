@@ -155,8 +155,6 @@ def main():
     )
     if not isinstance(results["config"]["model"], str):
         results["config"]["model"] = results["config"]["model"].model.config._name_or_path
-    results["config"]["wbits_avg"] = wbits_avg
-
     dumped = json.dumps(results, indent=2)
     print(dumped)
 
@@ -169,7 +167,6 @@ def main():
         f"num_fewshot: {args.num_fewshot}, batch_size: {args.batch_size}"
     )
     print(evaluator.make_table(results))
-
 
 if __name__ == "__main__":
     main()
