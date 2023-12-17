@@ -124,6 +124,7 @@ def main():
         print("Model device map:\n", lm.model.hf_device_map)
 
     if args.load:
+        print("Loading quantized model ...")
         lm.model = load_quantized_model(lm.model, args.load)
         lm.model.seqlen = args.model_seqlen
 
