@@ -27,18 +27,16 @@ class AQUtil(nn.Module):
 
     @torch.no_grad()
     def add_batch(self, inp: torch.Tensor):
-        """Accumulate a minibatch of layer inputs and update the hessian (aka X.T @ X)"""
+        """Accumulate a minibatch of layer inputs and update the X.T @ X (aka half hessian)"""
         assert self.XTX is not None, "Already ran quantization; cannot add more data batches"
-        if len(inp.shape) == 2:
-            inp = inp.unsqueeze(0)
-        tmp = inp.shape[0]
         if len(inp.shape) == 3:
             inp = inp.reshape((-1, inp.shape[-1]))
+        tmp = inp.shape[0]
         inp = inp.t()
 
         self.XTX *= self.nsamples / (self.nsamples + tmp)
         self.nsamples += tmp
-        inp = math.sqrt(2 / self.nsamples) * inp.to(self.XTX.dtype)
+        inp = math.sqrt(1 / self.nsamples) * inp.to(self.XTX.dtype)
         self.XTX += inp.matmul(inp.t())
 
     @torch.enable_grad()
