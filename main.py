@@ -339,6 +339,7 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
                 setattr(module, child_name, child.wrapped_layer)
     return aq_handlers
 
+
 class _LayerWrapperThatAccumulatesXTX(nn.Module):
     def __init__(self, layer: nn.Module, aq_handler: AQUtil):
         super().__init__()
@@ -346,6 +347,7 @@ class _LayerWrapperThatAccumulatesXTX(nn.Module):
     def forward(self, input, *args, **kwargs):
         self.aq_handler.add_batch(input)
         return self.wrapped_layer(input, *args, **kwargs)
+
 
 @torch.no_grad()
 def init_aq_engines_parallel(devices: Sequence[torch.device], layer: nn.Module, names: Sequence[str],
