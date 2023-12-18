@@ -15,12 +15,13 @@ from src.utils import ellipsis
 class AQUtil(nn.Module):
     """A wrapper class that runs AQ training for a single linear layer. All the important math is in QuantizedWeight """
 
-    def __init__(self, layer: nn.Linear):
+    def __init__(self, layer: nn.Linear, accumultor_dtype: torch.dtype = torch.float64):
         super().__init__()
         self.layer = layer
         self.device = layer.weight.device
         self.columns = self.layer.weight.data.shape[1]
-        self.register_buffer("XTX", torch.zeros((self.columns, self.columns), device=self.device))
+        self.register_buffer("XTX", torch.zeros(
+            (self.columns, self.columns), dtype=accumultor_dtype, device=self.device))
         self.quantized_weight: Optional[QuantizedWeight] = None
         self.nsamples = 0
 
@@ -37,7 +38,7 @@ class AQUtil(nn.Module):
 
         self.XTX *= self.nsamples / (self.nsamples + tmp)
         self.nsamples += tmp
-        inp = math.sqrt(2 / self.nsamples) * inp.float()
+        inp = math.sqrt(2 / self.nsamples) * inp.to(self.XTX.dtype)
         self.XTX += inp.matmul(inp.t())
 
     @torch.enable_grad()
@@ -114,7 +115,6 @@ class AQUtil(nn.Module):
             Formally, the indices must be in range [ 0 , self.out_features // self.out_group_size )
         """
         assert self.quantized_weight is not None, "must be called inside / after AQUtil.quantize"
-        XTX = self.XTX.double()
         quantized_weight = self.quantized_weight(selection)
 
         if isinstance(selection, ellipsis):
@@ -125,8 +125,8 @@ class AQUtil(nn.Module):
                                           selection.stop * self.quantized_weight.out_group_size)
 
             reference_weight = self.layer.weight.detach()[out_channel_selection].to(quantized_weight.dtype)
-        delta_weight = (quantized_weight - reference_weight).to(XTX.dtype)
-        return (delta_weight @ XTX).flatten() @ delta_weight.flatten() / self.quantized_weight.out_features
+        delta_weight = (quantized_weight - reference_weight).to(self.XTX.dtype)
+        return (delta_weight @ self.XTX).flatten() @ delta_weight.flatten() / self.quantized_weight.out_features
 
     def _substitute_and_compute_mse(self, overrides: nn.ParameterDict, selection: slice) -> torch.Tensor:
         """Utility for parallelism: replace the specified parameters of self.quantized_weight, then compute MSE"""
@@ -153,13 +153,14 @@ class AQUtil(nn.Module):
 
     def _substitute_and_beam_search(self, overrides: nn.ParameterDict, selection: slice, **kwargs) -> torch.Tensor:
         """Utility for parallelism: replace the specified parameters of self.quantized_weight, then run beam search"""
+        dtype = self.quantized_weight.codebooks.dtype
         for param_name, param_value in overrides.items():
             replace_parameter_(self.quantized_weight, param_name, param_value)
         out_channel_selection = slice(selection.start * self.quantized_weight.out_group_size,
                                       selection.stop * self.quantized_weight.out_group_size)
-        reference_weight = self.layer.weight.detach()[out_channel_selection].to(self.XTX.dtype)
+        reference_weight = self.layer.weight.detach()[out_channel_selection].to(dtype)
         return self.quantized_weight.beam_search_update_codes_(
-            self.XTX, reference_weight, selection=selection, **kwargs)
+            self.XTX.to(dtype), reference_weight, selection=selection, **kwargs).clone()
 
     @torch.no_grad()
     def beam_search_update_codes_(self, devices: Sequence[torch.device], replicas: Sequence[AQUtil],
@@ -167,8 +168,9 @@ class AQUtil(nn.Module):
         """Update self.quantized_weight.codes in-place via beam search"""
         if len(devices) == 1:  # single device
             assert replicas is None
+            dtype = self.quantized_weight.codebooks.dtype
             self.quantized_weight.beam_search_update_codes_(
-                self.XTX, self.layer.weight.detach().to(self.XTX.dtype), dim_rng=random.Random(seed), **kwargs)
+                self.XTX.to(dtype), self.layer.weight.detach().to(dtype), dim_rng=random.Random(seed), **kwargs)
         else:
             assert replicas[0] is self
             replicated_parameters = torch.nn.parallel.replicate(parameters_to_replicate, devices)
