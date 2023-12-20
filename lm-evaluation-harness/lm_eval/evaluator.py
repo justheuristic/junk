@@ -7,7 +7,6 @@ import lm_eval.models
 import lm_eval.tasks
 import lm_eval.base
 from lm_eval.utils import positional_deprecated, run_task_tests, simple_parse_args_string
-from gptq_config import QuantizationConfig
 
 try:
     import wandb
@@ -71,19 +70,14 @@ def simple_evaluate(
         assert wandb_installed
 
     if isinstance(model, str):
+        print("Model is string!")
         if model_args is None:
             model_args = ""
-        if quantization_args is None:
-            quantization_args = ""
-            quantization_config = None
-        else:
-            quantization_args = simple_parse_args_string(quantization_args)
-            quantization_config = QuantizationConfig.from_dict(quantization_args)
-
         lm = lm_eval.models.get_model(model).create_from_arg_string(
-            model_args, {"batch_size": batch_size, "device": device, "quantization_config": quantization_config}
+            model_args, {"batch_size": batch_size, "device": device}
         )
     else:
+        print("Model is not a string!")
         assert isinstance(model, lm_eval.base.LM)
         lm = model
 

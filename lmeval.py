@@ -5,9 +5,6 @@ import logging
 import sys
 import os
 
-from main import quantize_model
-from gptq_config import QuantizationConfig
-
 sys.path.append("./lm-evaluation-harness")
 import lm_eval.models
 from lm_eval import evaluator, tasks, utils
@@ -43,11 +40,11 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
     parser.add_argument("--model_args", default="")
-    parser.add_argument("--quantization_args", default=None)
     parser.add_argument("--tasks", default=None, choices=MultiChoice(tasks.ALL_TASKS))
     parser.add_argument("--provide_description", action="store_true")
     parser.add_argument("--num_fewshot", type=int, default=0)
     parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--exp_name", type=str, default="tmp", help="Experiment name if not load.")
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--output_path", default=None)
     parser.add_argument("--limit", type=int, default=None)
@@ -62,7 +59,7 @@ def parse_args():
         choices=[2048, 4096],
         help="Model seqlen and calibration data context length.",
     )
-    parser.add_argument("--load", type=str, default=None, help="Path to load quantized statistics.")
+    parser.add_argument("--load", type=str, default=None, help="Path to load quantized model.")
 
 
     return parser.parse_args()
@@ -85,7 +82,7 @@ def main():
     if args.log_wandb:
         wandb.init(
             dir=os.getcwd(),
-            name=f"{list(filter(len, args.load.split('/')))[-1]}" if args.load else str(args.quantization_args),
+            name=f"{list(filter(len, args.load.split('/')))[-1]}" if args.load else str(args.exp_name),
             config={a: getattr(args, a) for a in dir(args) if not a.startswith("_")},
             settings=wandb.Settings(code_dir="."),
             project=os.environ.get("WANDB_PROJECT", f"AQ_LMEVAl_{list(filter(len, args.model.split('/')))[-1]}"),
@@ -110,12 +107,6 @@ def main():
 
     if args.model_args is None:
         args.model_args = ""
-    if args.quantization_args is None:
-        args.quantization_args = ""
-        quantization_config = None
-    else:
-        quantization_args = utils.simple_parse_args_string(args.quantization_args)
-        quantization_config = QuantizationConfig.from_dict(quantization_args)
 
     lm = lm_eval.models.get_model(args.model).create_from_arg_string(
         args.model_args, dict(batch_size=args.batch_size, device=args.device)
@@ -127,17 +118,6 @@ def main():
         print("Loading quantized model ...")
         lm.model = load_quantized_model(lm.model, args.load)
         lm.model.seqlen = args.model_seqlen
-
-    if quantization_config is not None and args.load is not None:
-        assert lm.model.config.model_type in (
-            "llama",
-            "RefinedWebModel",
-        ), "Quantization is implemented only for llama and falcon families"
-
-        lm.model.seqlen = args.model_seqlen
-
-        _, wbits_avg = quantize_model(lm.model, quantization_config, args.device)
-        print(f"Average number of bits {wbits_avg:.2f}")
 
     results = evaluator.simple_evaluate(
         model=lm,
