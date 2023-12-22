@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument("--provide_description", action="store_true")
     parser.add_argument("--num_fewshot", type=int, default=0)
     parser.add_argument("--batch_size", type=int, default=None)
-    parser.add_argument("--exp_name", type=str, default="tmp", help="Experiment name if not load.")
+    parser.add_argument("--exp_name", type=str, default=None, help="Experiment name if not load.")
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--output_path", default=None)
     parser.add_argument("--limit", type=int, default=None)
@@ -80,9 +80,10 @@ def main():
 
     assert not args.provide_description  # not implemented
     if args.log_wandb:
+        assert (args.exp_name or args.load)
         wandb.init(
             dir=os.getcwd(),
-            name=f"{list(filter(len, args.load.split('/')))[-1]}" if args.load else str(args.exp_name),
+            name=f"{str(args.exp_name) if args.exp_name else list(filter(len, args.load.split('/')))[-1]}" ,
             config={a: getattr(args, a) for a in dir(args) if not a.startswith("_")},
             settings=wandb.Settings(code_dir="."),
             project=os.environ.get("WANDB_PROJECT", f"AQ_LMEVAl_{list(filter(len, args.model.split('/')))[-1]}"),
