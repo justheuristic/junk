@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from tqdm.auto import trange
 
 from src.kmeans import fit_kmeans, fit_kmeans_1d, fit_faiss_kmeans, find_nearest_cluster
+from src.rrr import reduced_rank_regression_from_weight
 from src.utils import maybe_script, ellipsis
 
 
@@ -14,6 +15,7 @@ class QuantizedWeight(nn.Module):
     EPS = 1e-9
 
     def __init__(self, *,
+                 XTX: torch.Tensor,
                  reference_weight: torch.Tensor,
                  in_group_size: int,
                  out_group_size: int,
@@ -22,6 +24,7 @@ class QuantizedWeight(nn.Module):
                  codebook_value_nbits: int = 16,
                  codebook_value_num_groups: int = 1,
                  scale_nbits: int = 0,
+                 rrr_rank: int = 0,
                  straight_through_gradient: Optional[bool] = None,
                  **init_kwargs
                  ):
@@ -31,6 +34,7 @@ class QuantizedWeight(nn.Module):
         assert self.out_features % out_group_size == 0
 
         self.out_group_size, self.in_group_size = out_group_size, in_group_size
+        self.rrr_rank = rrr_rank
         self.num_codebooks = num_codebooks
         self.nbits_per_codebook = nbits_per_codebook
         self.codebook_size = codebook_size = 2 ** nbits_per_codebook
@@ -38,6 +42,7 @@ class QuantizedWeight(nn.Module):
         self.codebook_value_num_groups = codebook_value_num_groups
         self.codebook_value_clusters = None
 
+        self.rrr_u = self.rrr_v = None
         self.scales = self.scales_clusters = self.scales_indices = None
         if straight_through_gradient is None and scale_nbits > 0:
             straight_through_gradient = scale_nbits >= 6
@@ -45,6 +50,12 @@ class QuantizedWeight(nn.Module):
         self.scale_nbits = scale_nbits
 
         with torch.no_grad():
+            if rrr_rank > 0:
+                u, v = reduced_rank_regression_from_weight(XTX, reference_weight, rrr_rank)
+                self.rrr_u = nn.Parameter(u, requires_grad=True)
+                self.rrr_v = nn.Parameter(v, requires_grad=True)
+                reference_weight = reference_weight - v @ u.T
+
             weight_groupwise = reference_weight.reshape(
                 self.out_features // out_group_size, out_group_size,
                 self.in_features // in_group_size, in_group_size
@@ -123,7 +134,10 @@ class QuantizedWeight(nn.Module):
             Formally, the indices must be in range [ 0 , self.out_features // self.out_group_size )
 
         """
-        return _reconstruct_weight(self.codes[selection], self.get_codebooks(), self.get_scales()[selection])
+        weight = _dequantize_weight(self.codes[selection], self.get_codebooks(), self.get_scales()[selection])
+        if self.rrr_rank > 0:
+            weight += self.rrr_v[selection] @ self.rrr_u.T
+        return weight
 
     @torch.no_grad()
     def beam_search_update_codes_(
@@ -143,6 +157,8 @@ class QuantizedWeight(nn.Module):
         :param kwargs: any additional keyword arguments are forwarded to beam_search_optimal_codes function
         :returns: the updated codes
         """
+        if self.rrr_rank > 0:
+            reference_weight = reference_weight - self.rrr_v[selection] @ self.rrr_u.T
         self.codes[selection] = beam_search_optimal_codes(
             XTX=XTX, reference_weight=reference_weight, codebooks=self.get_codebooks(),
             prev_codes=self.codes[selection], scales=self.get_scales()[selection], **kwargs
@@ -172,7 +188,9 @@ class QuantizedWeight(nn.Module):
             scale_store = num_out_groups * 16
         else:
             assert False
-        return (matrix_store + codebooks_store + scale_store) / num_parameters
+
+        rrr_store = (self.out_features * self.rrr_rank + self.rrr_rank * self.in_features) * 16
+        return (matrix_store + codebooks_store + scale_store + rrr_store) / num_parameters
 
     def extra_repr(self) -> str:
         return f"{self.out_features=}, {self.in_features=}, bits_per_parameter={self.estimate_nbits_per_parameter()}"
@@ -234,7 +252,7 @@ def beam_search_optimal_codes(
     in_features = num_in_groups * in_group_size
     out_features = num_out_groups * out_group_size
     assert reference_weight.shape == (out_features, in_features)
-    prev_weight = _reconstruct_weight(prev_codes, codebooks, scales)
+    prev_weight = _dequantize_weight(prev_codes, codebooks, scales)
 
     # initialize all beam codes as previous codes - so they can be updated during beam search
     beam_codes = prev_codes.unsqueeze(0)
@@ -296,7 +314,7 @@ def beam_search_optimal_codes(
 
 
 @maybe_script
-def _reconstruct_weight(
+def _dequantize_weight(
         codes: torch.Tensor, codebooks: torch.Tensor, scales: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Decode float weights from quantization codes. Differentiable.
@@ -490,7 +508,7 @@ def _beam_search_select_best(
             beam_codes[best_hypo_source_ids[beam_index, :], arange_out_groups, ...]
         new_beam_codes[beam_index, :, input_group_index, codebook_index] = \
             best_hypo_codes[beam_index, :]
-        new_beam_weights[beam_index, :, :] = _reconstruct_weight(
+        new_beam_weights[beam_index, :, :] = _dequantize_weight(
             new_beam_codes[beam_index, ...], codebooks, scales)
 
     # Note: the code above can be further accelerated by 1) vectorzing loop and ...

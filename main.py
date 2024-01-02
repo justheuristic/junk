@@ -563,6 +563,12 @@ if __name__ == "__main__":
         help="How many input features are quantized together",
     )
     parser.add_argument(
+        "--rrr_rank",
+        type=int,
+        default=8,
+        help="The hidden rank for RRR decomposition",
+    )
+    parser.add_argument(
         "--beam_size",
         type=int,
         default=1,

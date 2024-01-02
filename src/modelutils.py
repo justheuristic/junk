@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from tqdm import trange
 from transformers import AutoConfig, AutoModelForCausalLM
-from src.aq import _reconstruct_weight, QuantizedWeight
+from src.aq import _dequantize_weight, QuantizedWeight
 
 MODEL_ERROR_MSG = "Unsupported model type {} - only 'llama', 'Yi', 'opt' and 'falcon' are supported"
 FALCON_TYPES = ("falcon", "refinedweb", "refinedwebmodel")
