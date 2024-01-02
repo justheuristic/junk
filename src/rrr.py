@@ -83,10 +83,6 @@ def reduced_rank_regression_from_weight(
     :param svd_niter: if specified, estimate SVD with this many steps of Algorithm 5.1 from Halko et al, 2009
         If None, compute SVD exactly and take the first k components
     :note: you can also compute partial SVD with arpack from scipy.sparse.linalg.svds; this is not implemented
-    :param fit_intercept: if True (default), learn the bias term as in the regular least-squares
-        if False, force bias term to be zeros -- but still return the resulting all-zero vector
-    :param pinverse_device: optionally transfer the covariance matrix to this device and compute inverse there
-        Computing pinverse of large matrices on CPU can take hours
     :returns: (U, V, b) such that Y ~ X @ U @ V.T
        In other words, U @ V.T ~ W.T    or equivalently W ~ V @ U.T
 
