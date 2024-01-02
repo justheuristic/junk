@@ -35,6 +35,7 @@ class QuantizedWeight(nn.Module):
 
         self.out_group_size, self.in_group_size = out_group_size, in_group_size
         self.rrr_rank = rrr_rank
+        print("!!!! RRR RANK =", rrr_rank)
         self.num_codebooks = num_codebooks
         self.nbits_per_codebook = nbits_per_codebook
         self.codebook_size = codebook_size = 2 ** nbits_per_codebook
