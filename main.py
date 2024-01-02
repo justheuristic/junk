@@ -565,7 +565,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--rrr_rank",
         type=int,
-        default=8,
+        default=0,
         help="The hidden rank for RRR decomposition",
     )
     parser.add_argument(
