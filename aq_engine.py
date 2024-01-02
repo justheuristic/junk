@@ -50,8 +50,8 @@ class AQUtil(nn.Module):
         assert isinstance(args.devices, (list, tuple)) and len(args.devices) >= 1, f"Found devices = {args.devices}"
         assert args.devices[0] == self.device, (args.devices[0], self.XTX.device)
         self.quantized_weight = QuantizedWeight(
-            XTX=self.XTX,
-            reference_weight=self.layer.weight.detach().to(self.device).float(),
+            XTX=self.XTX.to(device=self.device, dtype=torch.float32),
+            reference_weight=self.layer.weight.detach().to(device=self.device, dtype=torch.float32),
             out_group_size=args.out_group_size,
             in_group_size=args.in_group_size,
             num_codebooks=args.num_codebooks,
