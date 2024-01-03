@@ -100,9 +100,9 @@ def finetune_groupwise(
         for i in range(len(args.devices))
     ]  # TODO maybe add asynchronous host-to-device copy here if args.offload_activations
 
-
     previous_best_loss = float('inf')  # for early stopping
     for epoch in range(args.max_go_epochs):
+        loss_numerator = loss_denominator = 0
         for step in range(steps_per_epoch):
             if len(args.devices) == 1:
                 loss = _compute_mse_on_batch(args.devices[0], layer, batch_iterators[0], **kwargs)
@@ -111,19 +111,21 @@ def finetune_groupwise(
 
             if not torch.isfinite(loss).item():
                 raise ValueError(f"Fine-tuning loss is {loss}")
-            if step == 0 and args.go_relative_mse_tolerance is not None:
-                raise NotImplementedError("STOPPING CRITERION NEEDS TO BE REWRITTEN - SHOULD USE FULL EPOCH LOSS OR VAL LOSS, NOT FIRST BATCH LOSS")
-                if loss.item() / previous_best_loss > (1.0 - args.go_relative_mse_tolerance):
-                    return layer  # early stopping; no updates after last epoch's beam search
-                previous_best_loss = min(previous_best_loss, loss.item())
 
             opt.zero_grad()
             loss.backward()
             opt.step()
-            if verbose:# and (epoch * steps_per_epoch + step) % args.print_frequency == 0: TODO uncomment
-                print(f"epoch={epoch}\tstep={step}\tloss={loss.item():.10f}\t")
+            loss_numerator += loss.item()
+            loss_denominator += 1
+            if verbose and (epoch * steps_per_epoch + step) % args.print_frequency == 0:
+                print(f"epoch={epoch}\tstep={step}\tloss={loss_numerator / loss_denominator:.10f}\t")
 
         # TODO MAYBE RUN EVAL HERE?!
+        if args.go_relative_mse_tolerance is not None:
+            epoch_loss = loss_numerator / loss_denominator
+            if epoch_loss / previous_best_loss > (1.0 - args.go_relative_mse_tolerance):
+                return layer  # early stopping; no updates after last epoch's beam search
+            previous_best_loss = min(previous_best_loss, previous_best_loss)
 
     return layer
 
