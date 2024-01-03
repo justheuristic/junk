@@ -1,7 +1,7 @@
 from __future__ import annotations
 from argparse import Namespace
 from collections import defaultdict
-from typing import Sequence, Iterator, Tuple, Dict, Any
+from typing import Sequence, Iterator, Tuple, Dict, Any, List
 
 import torch
 import torch.nn as nn
@@ -58,10 +58,11 @@ def finetune_groupwise(
     # TODO -- vvvvvvvv CRAPPY CODE THAT SHOULD BE REFACTORED vvvvvvvv
     # intent: for each replica, store a pair (submodule, name) where to put each trainable param
     differentiable_parameters_by_name = {name: param for name, param in layer.named_parameters() if param.requires_grad}
-    differentiable_parameters = nn.ParameterList(list(differentiable_parameters_by_name.values()))
+    param_names, differentiable_parameters = zip(*differentiable_parameters_by_name.items())
+    differentiable_parameters = nn.ParameterList(differentiable_parameters)
     substitution_tables = []
     if replicas:
-        param_to_name = {param: name for name, param in differentiable_parameters_by_name}
+        param_to_name = {param: name for name, param in differentiable_parameters_by_name.items()}
         param_occurences = defaultdict(list)   # param_name -> List [ Tuple [submodule name, attr name] ]
         for submodule_name, submodule in layer.named_modules():
             for attr_name, param in submodule.named_parameters(recurse=False):  # immediate params (excluding children)
@@ -70,23 +71,27 @@ def finetune_groupwise(
                     param_occurences[param_name].append((submodule_name, attr_name))
         assert len(param_occurences) == len(differentiable_parameters), "internal error: not all trainable parameters were found"
 
+
         for replica in replicas:
-            substitution_table = defaultdict(list)  # master param -> List[ Tuple[replica submodule, attr name] ]
+            substitution_table = list()  # for each master param -> List[ Tuple[replica submodule, attr name] ]
             replica_modules_by_name: Dict[str, nn.Module] = dict(replica.named_modules())
-            for param_name, occurences in param_occurences.items():
-                for submodule_name, attr_name in occurences:
-                    substitution_table[param_name].append((replica_modules_by_name[substitution_table], attr_name))
+
+            for param_name, master_param in zip(param_names, differentiable_parameters):
+                param_substitutions = list()
+                for submodule_name, attr_name in param_occurences[param_name]:
+                    param_substitutions.append((replica_modules_by_name[submodule_name], attr_name))
+                substitution_table.append(param_substitutions)
             print(substitution_table)
             substitution_tables.append(substitution_table)
 
     print(substitution_tables)
-    raise 123
     # TODO -- ^^^^^^^^ CRAPPY CODE THAT SHOULD BE REFACTORED ^^^^^^^^
     # end of crappy code
+    raise 123
 
 
     print(f"Fine-tuning {sum(param.numel() for param in differentiable_parameters)} parameters")
-    opt = torch.optim.Adam(differentiable_parameters.values(), lr=args.lr, betas=(0.0, 0.95), amsgrad=True)
+    opt = torch.optim.Adam(differentiable_parameters, lr=args.lr, betas=(0.0, 0.95), amsgrad=True)
 
 
     batch_iterators = [
@@ -141,26 +146,24 @@ def _compute_mse_on_batch(
     return F.mse_loss(outs_prediction, outs_batch)
 
 
-def _substitute_and_compute_mse(device: torch.device, layer: nn.Module, batch_iter: Iterator, overrides: nn.ParameterDict, **kwargs) -> torch.Tensor:
-    """Utility for parallelism: replace the specified parameters of layer, then compute MSE"""
-    for param_name, param_value in overrides.items():
-        replace_parameter_(layer, param_name, param_value)
-    return _compute_mse_on_batch(device, layer, batch_iter, **kwargs)
-
 
 def _compute_mse_parallel(devices: Sequence[torch.device],
                           replicas: Sequence[nn.Module],
                           parameters_to_replicate: nn.ParameterList,
-                          substitution_tables: Sequence[Dict[nn.Parameter, Sequence[Tuple[nn.Module, str]]]],
+                          substitution_tables: Sequence[List[Sequence[Tuple[nn.Module, str]]]],
                           batch_iterators: Sequence[Iterator[Tuple[torch.Tensor, torch.Tensor]]],
                           kwargs_by_device: Sequence[Dict[str, Any]]
                           ) -> torch.Tensor:
     """Compute MSE in parallel over multiple GPUs, each GPU processes a portion of samples"""
     replicated_parameters = torch.nn.parallel.replicate(parameters_to_replicate, devices, detach=False)
-    funcs_by_replica = [_substitute_and_compute_mse for _ in replicas]
-    inputs_by_replica = [(devices[0], dict(), batch_iterators[0])]  # no overrides needed for 0-th replica
-    for i in range(1, len(devices)):
-        inputs_by_replica.append((devices[0], replicated_parameters[i], batch_iterators[i]))
+    funcs_by_replica = [_compute_mse_on_batch for _ in replicas]
+    inputs_by_replica = []
+    for i in range(len(devices)):
+        if i != 0:  # no overrides needed for master module
+            for replacement_param, param_substitutions in zip(replicated_parameters[i], substitution_tables[i]):
+                for (replica_submodule, attr_name) in param_substitutions:
+                    replace_parameter_(replica_submodule, attr_name, replacement_param)
+        inputs_by_replica.append((devices[i], replicas[i], batch_iterators[i]))
     mse_components = torch.nn.parallel.parallel_apply(
         funcs_by_replica, inputs_by_replica, kwargs_by_device, devices=devices)
     return Gather.apply(devices[0], 0, *(mse.view(1) for mse in mse_components)).mean()
