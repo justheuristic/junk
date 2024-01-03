@@ -77,9 +77,10 @@ def iterate_minibatches(
     assert all(len(x) == num_samples for x in tensors)
     device = tensors[0].device
     indices = torch.randperm(num_samples, device=device)
-    upper_bound = len(indices) // batch_size * batch_size + allow_incomplete * batch_size - 1
     while True:
-        for batch_start in range(0, upper_bound, batch_size):
+        for batch_start in range(0, len(indices), batch_size):
+            if not allow_incomplete and batch_start + batch_size > len(indices):
+                break
             batch_ix = indices[batch_start: batch_start + batch_size]
             batch = callback(tuple(tensor[batch_ix] for tensor in tensors))
             yield batch if isinstance(batch, (list, tuple)) and len(tensors) > 1 else batch[0]
