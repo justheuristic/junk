@@ -154,7 +154,7 @@ class QuantizedWeight(nn.Module):
         weight = _dequantize_weight(self.codes[selection], self.get_codebooks(), self.get_scales()[selection])
         if self.rrr_rank > 0:
             assert self.out_group_size == 1, "TODO not implemented yet"
-            weight += self.rrr_v[selection] @ self.rrr_u.T
+            weight = weight.addmm_(self.rrr_v[selection], self.rrr_u.T)
         return weight
 
     @torch.no_grad()
