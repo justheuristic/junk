@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import functools
 import os
 from typing import Callable, Sequence, Iterator
@@ -57,6 +58,7 @@ def maybe_script(fn: callable) -> callable:
     return torch.jit.script(fn) if should_script else fn
 
 
+@contextlib.contextmanager
 def using_tf32(enabled: bool):
     was_cudnn = torch.backends.cudnn.allow_tf32
     was_matmul = torch.backends.cuda.matmul.allow_tf32
