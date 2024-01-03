@@ -213,6 +213,7 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
                 print("DEBUG - UNINDENT NEXT LINES ")
                 print("PREPARING TO FINETUNE")
                 print(layer)
+                layer = layer.to(dtype=torch.float32)
                 layer = finetune_groupwise(layer=layer, inps=inps, outs=outs, args=args, **forward_args)
                 print("FINISHED FINETUNING")
                 raise 123
