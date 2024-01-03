@@ -97,6 +97,8 @@ def finetune_groupwise(
         for i in range(len(args.devices))
     ]  # TODO maybe add asynchronous host-to-device copy here if args.offload_activations
 
+    # IT IS VERY SUSPICIOUS THAT IT FAILS WITH BATCH 4 EXACTLY AFTER 32 STEPS!!! (32x4 = 128samples)
+
 
     previous_best_loss = float('inf')  # for early stopping
     for epoch in range(args.max_epochs):
@@ -129,10 +131,10 @@ def _compute_mse_on_batch(
     Compute the activation MSE error between transformer layers
     TODO docs
     """
-    print(end=f"{device} - {layer.self_attn.q_proj.quantized_weight.scales.sum().item()}\n")
     inps_batch, outs_batch = next(batch_iter)
     inps_batch = inps_batch.to(device, dtype=torch.float32, non_blocking=True)  # TODO this should be prefetched
     outs_batch = outs_batch.to(device, dtype=torch.float32, non_blocking=True)  # TODO this should be prefetched; when prefetched, remove device arg frokm this function
+    print(end=f"{device} - {inps_batch.shape} - {inps_batch.sum().item()}\n")
 
     # TODO un-hardcode this
     if 'attention_mask' in kwargs:
