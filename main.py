@@ -213,8 +213,13 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
             print("PREPARING TO FINETUNE")
             print(layer)
             layer = layer.to(dtype=torch.float32)
+            torch.backends.cudnn.allow_tf32 = True
+            torch.backends.cuda.matmul.allow_tf32 = True #TODO unhardcode
+
             layer = finetune_groupwise(layer=layer, inps=inps, outs=outs, args=args, **forward_args)
             layer = layer.to(dtype=torch.float16)  # TODO un-hardcode!
+            torch.backends.cudnn.allow_tf32 = False
+            torch.backends.cuda.matmul.allow_tf32 = False
             print("FINISHED FINETUNING")
 
         if len(args.devices) == 1:

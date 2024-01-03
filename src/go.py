@@ -89,7 +89,6 @@ def finetune_groupwise(
     print(f"Fine-tuning {sum(param.numel() for param in differentiable_parameters)} parameters")
     opt = torch.optim.Adam(differentiable_parameters, lr=args.go_lr, betas=(0.9, 0.95), amsgrad=True) #TODO do we really need beta1?
 
-
     assert args.batch_size % len(args.devices) == 0, "batch_size must be divisible by the number of GPUs"
     per_device_batch_size = args.batch_size // len(args.devices)
     num_samples_per_device = len(inps[0])
@@ -144,6 +143,7 @@ def _compute_mse_on_batch(
         assert kwargs['attention_mask'].ndim == 4
         assert kwargs['attention_mask'].shape[0] == 1
         kwargs = dict(kwargs, attention_mask=kwargs['attention_mask'].tile(len(inps_batch), 1, 1, 1))
+
 
     outs_prediction, *_unused = layer(inps_batch, **kwargs)
     assert outs_prediction.shape == outs_batch.shape
