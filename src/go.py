@@ -90,8 +90,10 @@ def finetune_groupwise(
     opt = torch.optim.Adam(differentiable_parameters, lr=args.lr, betas=(0.9, 0.95), amsgrad=True)
 
 
+    assert args.batch_size // len(args.devices) == 0, "batch_size must be divisible by the number of GPUs"
+    per_device_batch_size = args.batch_size // len(args.devices)
     batch_iterators = [
-        iterate_minibatches(inps[i], outs[i], batch_size=args.batch_size)
+        iterate_minibatches(inps[i], outs[i], batch_size=per_device_batch_size)
         for i in range(len(args.devices))
     ]  # TODO maybe add asynchronous host-to-device copy here
 

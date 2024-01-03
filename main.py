@@ -594,6 +594,12 @@ if __name__ == "__main__":
         help="Keep top-(this_many) best candidates for each codebook when finding optimal codes",
     )
     parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1,
+        help="Train on this many sequences when fine-tuning the layer (GO), globally across all GPUs",
+    )
+    parser.add_argument(
         "--sparsity_regularizer",
         type=float,
         default=0,
