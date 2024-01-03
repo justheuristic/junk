@@ -87,22 +87,24 @@ def finetune_groupwise(
 
 
     print(f"Fine-tuning {sum(param.numel() for param in differentiable_parameters)} parameters")
-    opt = torch.optim.Adam(differentiable_parameters, lr=1e-5, betas=(0.9, 0.95), amsgrad=True) #TODO unhardcode learning rate
+    opt = torch.optim.Adam(differentiable_parameters, lr=args.go_lr, betas=(0.9, 0.95), amsgrad=True) #TODO do we really need beta1?
 
 
     assert args.batch_size % len(args.devices) == 0, "batch_size must be divisible by the number of GPUs"
     per_device_batch_size = args.batch_size // len(args.devices)
+    num_samples_per_device = len(inps[0])
+    assert all(len(inps_tensor) == num_samples_per_device for inps_tensor in inps)
+    assert num_samples_per_device % per_device_batch_size == 0, (num_samples_per_device, per_device_batch_size)
+    steps_per_epoch = num_samples_per_device // per_device_batch_size
     batch_iterators = [
         iterate_minibatches(inps[i], outs[i], batch_size=per_device_batch_size)
         for i in range(len(args.devices))
     ]  # TODO maybe add asynchronous host-to-device copy here if args.offload_activations
 
-    # IT IS VERY SUSPICIOUS THAT IT FAILS WITH BATCH 4 EXACTLY AFTER 32 STEPS!!! (32x4 = 128samples)
-
 
     previous_best_loss = float('inf')  # for early stopping
-    for epoch in range(args.max_epochs):
-        for step in range(args.steps_per_epoch):
+    for epoch in range(args.max_go_epochs):
+        for step in range(steps_per_epoch):
             if len(args.devices) == 1:
                 loss = _compute_mse_on_batch(args.devices[0], layer, batch_iterators[0], **kwargs)
             else:
@@ -110,16 +112,16 @@ def finetune_groupwise(
 
             if not torch.isfinite(loss).item():
                 raise ValueError(f"Fine-tuning loss is {loss}")
-            if step == 0 and args.relative_mse_tolerance is not None:
-                raise NotImplementedError("STOPPING CRITERION SHOULD USE FULL EPOCH LOSS")
-                if loss.item() / previous_best_loss > (1.0 - args.relative_mse_tolerance):
+            if step == 0 and args.go_relative_mse_tolerance is not None:
+                raise NotImplementedError("STOPPING CRITERION NEEDS TO BE REWRITTEN - SHOULD USE FULL EPOCH LOSS OR VAL LOSS, NOT FIRST BATCH LOSS")
+                if loss.item() / previous_best_loss > (1.0 - args.go_relative_mse_tolerance):
                     return layer  # early stopping; no updates after last epoch's beam search
                 previous_best_loss = min(previous_best_loss, loss.item())
 
             opt.zero_grad()
             loss.backward()
             opt.step()
-            if verbose:# and (epoch * args.steps_per_epoch + step) % args.print_frequency == 0: TODO uncomment
+            if verbose:# and (epoch * steps_per_epoch + step) % args.print_frequency == 0: TODO uncomment
                 print(f"epoch={epoch}\tstep={step}\tloss={loss.item():.10f}\t")
 
         # TODO MAYBE RUN EVAL HERE?!
@@ -136,7 +138,6 @@ def _compute_mse_on_batch(
     inps_batch, outs_batch = next(batch_iter)
     inps_batch = inps_batch.to(device, dtype=torch.float32, non_blocking=True)  # TODO this should be prefetched
     outs_batch = outs_batch.to(device, dtype=torch.float32, non_blocking=True)  # TODO this should be prefetched; when prefetched, remove device arg frokm this function
-    print(end=f"{device} - {inps_batch.shape} - {inps_batch.sum().item()}\n")
 
     # TODO un-hardcode this
     if 'attention_mask' in kwargs:
