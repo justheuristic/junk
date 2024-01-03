@@ -122,6 +122,7 @@ def finetune_groupwise(
                 print(f"epoch={epoch}\tstep={step}\tloss={loss.item():.10f}\t")
 
         # TODO MAYBE RUN EVAL HERE?!
+        raise NotImplementedError("STOPPING CRITERION SHOULD USE FULL EPOCH LOSS")
     return layer
 
 
