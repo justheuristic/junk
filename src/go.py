@@ -101,9 +101,9 @@ def finetune_groupwise(
     assert num_samples_per_device % local_batch_size * num_accumulation_steps == 0, (num_samples_per_device, local_batch_size)
     steps_per_epoch = num_samples_per_device * len(args.devices) // args.batch_size
     batch_iterators = [
-        iterate_minibatches(inps[i], outs[i], batch_size=local_batch_size)
+        iterate_minibatches(inps[i], outs[i], batch_size=local_batch_size, device=args.devices[i])
         for i in range(len(args.devices))
-    ]  # TODO maybe add asynchronous host-to-device copy here if args.offload_activations
+    ]
 
     previous_best_loss = float('inf')  # for early stopping
     steps_accumulated = 0

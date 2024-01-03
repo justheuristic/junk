@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import os
-from typing import Callable, Sequence, Iterator
+from typing import Callable, Sequence, Iterator, Optional
 
 import torch
 
@@ -70,7 +70,7 @@ def using_tf32(enabled: bool):
 
 
 def iterate_minibatches(
-        *tensors: torch.Tensor, batch_size: int, allow_incomplete: bool = True,
+        *tensors: torch.Tensor, batch_size: int, allow_incomplete: bool = True, device: Optional[torch.device] = None,
         callback: Callable[[Sequence[torch.Tensor]], Sequence[torch.Tensor]] = lambda x: x
 ) -> Iterator[Sequence[torch.Tensor]]:
     """
@@ -87,12 +87,16 @@ def iterate_minibatches(
     """
     num_samples = len(tensors[0])
     assert all(len(x) == num_samples for x in tensors)
-    device = tensors[0].device
-    indices = torch.randperm(num_samples, device=device)
+    indices = torch.randperm(num_samples, device=tensors[0].device)
     while True:
+        prev_batch = None
         for batch_start in range(0, len(indices), batch_size):
             if not allow_incomplete and batch_start + batch_size > len(indices):
                 break
             batch_ix = indices[batch_start: batch_start + batch_size]
-            batch = callback(tuple(tensor[batch_ix] for tensor in tensors))
-            yield batch if isinstance(batch, (list, tuple)) and len(tensors) > 1 else batch[0]
+            batch = callback(tuple(tensor[batch_ix].to(device, non_blocking=True) for tensor in tensors))
+            if prev_batch is not None:
+                yield prev_batch
+            prev_batch = batch if isinstance(batch, (list, tuple)) and len(tensors) > 1 else batch[0]
+            del batch
+        yield prev_batch
