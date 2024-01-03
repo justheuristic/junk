@@ -1,5 +1,6 @@
 from __future__ import annotations
 from argparse import Namespace
+from collections import defaultdict
 from typing import Sequence, Iterator, Tuple, Dict, Any
 
 import torch
@@ -53,10 +54,30 @@ def finetune_groupwise(
                                      for k, v in kwargs.items()})
 
     # initialize trainable parameters on main device
-    differentiable_parameters = nn.ParameterDict(
-        {name: param for name, param in layer.named_parameters() if param.requires_grad}
-    )
-    print(f"Fine-tuning {sum(param.numel() for _, param in differentiable_parameters.items())} parameters")
+    #TODO this code is a mess; unfuck it
+    # intent: for each replica, store a pair (submodule, name) where to put each trainable param
+    differentiable_parameters_by_name = {name: param for name, param in layer.named_parameters() if param.requires_grad}
+    differentiable_parameters = nn.ParameterList(list(differentiable_parameters_by_name.values()))
+    substitution_tables = []
+    if replicas:
+        for replica in replicas:
+            substitution_table = defaultdict(list)  # master param -> List[ Tuple[replica submodule, attr name] ]
+            replica_param_to_name = {param: name for name, param in replica.named_parameters() if name in differentiable_parameters_by_name}
+            for submodule in replica.modules():
+                for attr_name, replica_param in submodule.named_parameters(recurse=False):  # immediate params (excluding children)
+                    if replica_param in replica_param_to_name:
+                        param_name = replica_param_to_name[replica_param]
+                        master_param = differentiable_parameters_by_name[param_name]
+                        substitution_table[master_param].append((submodule, attr_name))
+            substitution_tables.append(substitution_table)
+            for master_param in differentiable_parameters:
+                assert master_param in substitution_tables
+
+    print(substitution_tables)
+    raise 123
+
+
+    print(f"Fine-tuning {sum(param.numel() for param in differentiable_parameters)} parameters")
     opt = torch.optim.Adam(differentiable_parameters.values(), lr=args.lr, betas=(0.0, 0.95), amsgrad=True)
 
 
@@ -72,7 +93,7 @@ def finetune_groupwise(
             if len(args.devices) == 1:
                 loss = _compute_mse_on_batch(args.devices[0], layer, batch_iterators[0], **kwargs)
             else:
-                loss = _compute_mse_parallel(args.devices, replicas, differentiable_parameters, batch_iterators, kwargs_by_device)
+                loss = _compute_mse_parallel(args.devices, replicas, differentiable_parameters, substitution_tables, batch_iterators, kwargs_by_device)
 
             if not torch.isfinite(loss).item():
                 raise ValueError(f"Fine-tuning loss is {loss}")
