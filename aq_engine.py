@@ -40,7 +40,7 @@ class AQEngine(nn.Module):
         self.XTX += inp.matmul(inp.t())
 
     @torch.enable_grad()
-    def quantize(self, *, args: Namespace, verbose=True) -> QuantizedWeight:
+    def quantize(self, *, args: Namespace, verbose: bool = True) -> QuantizedWeight:
         """ create a QuantizedLinear with specified args based on the collected hessian (XTX) data"""
         assert isinstance(args.devices, (list, tuple)) and len(args.devices) >= 1, f"Found devices = {args.devices}"
         assert args.devices[0] == self.device, (args.devices[0], self.XTX.device)

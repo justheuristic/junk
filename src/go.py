@@ -20,8 +20,8 @@ def finetune_groupwise(
     inps: Sequence[torch.Tensor],
     outs: Sequence[torch.Tensor],
     args: Namespace,
-    verbose=True,
-    kwargs,
+    verbose: bool = True,
+    **kwargs,
 ) -> QuantizedWeight:
     """
     Fine-tune a module with pre-quantized linear layers so as to minimize MSE between layer-wise inps/outs
