@@ -87,7 +87,7 @@ def finetune_groupwise(
 
 
     print(f"Fine-tuning {sum(param.numel() for param in differentiable_parameters)} parameters")
-    opt = torch.optim.Adam(differentiable_parameters, lr=1e-5, betas=(0.9, 0.95), amsgrad=True) #TODO unhardcode learning rate
+    opt = torch.optim.Adam(differentiable_parameters, lr=args.lr, betas=(0.9, 0.95), amsgrad=True) #TODO unhardcode learning rate
 
 
     assert args.batch_size % len(args.devices) == 0, "batch_size must be divisible by the number of GPUs"
