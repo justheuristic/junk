@@ -217,7 +217,6 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
                 layer = finetune_groupwise(layer=layer, inps=inps, outs=outs, args=args, **forward_args)
                 layer = layer.to(dtype=torch.float16)  # TODO un-hardcode!
                 print("FINISHED FINETUNING")
-                raise 123
 
         if len(args.devices) == 1:
             assert len(inps) == len(outs) == 1

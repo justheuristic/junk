@@ -116,7 +116,7 @@ def finetune_groupwise(
             opt.zero_grad()
             loss.backward()
             opt.step()
-            if verbose and (epoch * args.steps_per_epoch + step) % args.print_frequency == 0:
+            if verbose:# and (epoch * args.steps_per_epoch + step) % args.print_frequency == 0: TODO uncomment
                 print(f"epoch={epoch}\tstep={step}\tloss={loss.item():.10f}\t")
 
         # TODO MAYBE RUN EVAL HERE?!
