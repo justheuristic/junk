@@ -111,6 +111,7 @@ def finetune_groupwise(
             if not torch.isfinite(loss).item():
                 raise ValueError(f"Fine-tuning loss is {loss}")
             if step == 0 and args.relative_mse_tolerance is not None:
+                raise NotImplementedError("STOPPING CRITERION SHOULD USE FULL EPOCH LOSS")
                 if loss.item() / previous_best_loss > (1.0 - args.relative_mse_tolerance):
                     return layer  # early stopping; no updates after last epoch's beam search
                 previous_best_loss = min(previous_best_loss, loss.item())
@@ -122,7 +123,7 @@ def finetune_groupwise(
                 print(f"epoch={epoch}\tstep={step}\tloss={loss.item():.10f}\t")
 
         # TODO MAYBE RUN EVAL HERE?!
-        raise NotImplementedError("STOPPING CRITERION SHOULD USE FULL EPOCH LOSS")
+
     return layer
 
 
