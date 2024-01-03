@@ -102,11 +102,13 @@ def _compute_mse_on_batch(layer: nn.Module, batch_iter: Iterator[Tuple[torch.Ten
     assert outs_prediction.shape == outs_batch.shape
     return F.mse_loss(outs_prediction, outs_batch)
 
+
 def _substitute_and_compute_mse(layer: nn.Module, *args, overrides: nn.ParameterDict, **kwargs) -> torch.Tensor:
     """Utility for parallelism: replace the specified parameters of layer, then compute MSE"""
     for param_name, param_value in overrides.items():
         replace_parameter_(layer, param_name, param_value)
     return _compute_mse_on_batch(layer, *args, **kwargs)
+
 
 def _compute_mse_parallel(devices: Sequence[torch.device],
                           replicas: Sequence[nn.Module],
