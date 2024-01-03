@@ -71,7 +71,6 @@ def finetune_groupwise(
                     param_occurences[param_name].append((submodule_name, attr_name))
         assert len(param_occurences) == len(differentiable_parameters), "internal error: not all trainable parameters were found"
 
-
         for replica in replicas:
             substitution_table = list()  # for each master param -> List[ Tuple[replica submodule, attr name] ]
             replica_modules_by_name: Dict[str, nn.Module] = dict(replica.named_modules())
@@ -81,17 +80,14 @@ def finetune_groupwise(
                 for submodule_name, attr_name in param_occurences[param_name]:
                     param_substitutions.append((replica_modules_by_name[submodule_name], attr_name))
                 substitution_table.append(param_substitutions)
-            print(substitution_table)
             substitution_tables.append(substitution_table)
 
-    print(substitution_tables)
     # TODO -- ^^^^^^^^ CRAPPY CODE THAT SHOULD BE REFACTORED ^^^^^^^^
     # end of crappy code
-    raise 123
 
 
     print(f"Fine-tuning {sum(param.numel() for param in differentiable_parameters)} parameters")
-    opt = torch.optim.Adam(differentiable_parameters, lr=args.lr, betas=(0.0, 0.95), amsgrad=True)
+    opt = torch.optim.Adam(differentiable_parameters, lr=args.lr, betas=(0.9, 0.95), amsgrad=True)
 
 
     batch_iterators = [
