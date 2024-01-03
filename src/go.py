@@ -22,7 +22,7 @@ def finetune_groupwise(
     args: Namespace,
     verbose: bool = True,
     **kwargs,
-) -> QuantizedWeight:
+) -> nn.Module:
     """
     Fine-tune a module with pre-quantized linear layers so as to minimize MSE between layer-wise inps/outs
 
