@@ -191,7 +191,7 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
                     for submodule in layer.modules():
                         for child_name, child_module in submodule.named_children():
                             if child_module is aq_handlers[sublayer_name].layer:
-                                setattr(module, child_name, new_linear)
+                                setattr(submodule, child_name, new_linear)
                                 found_original = True  # note: do not break to handle tied layers
 
                     assert found_original, f"could not find {sublayer_name}"
@@ -210,7 +210,7 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
                 print("curent_avg_bits", overall_bits / model_number_of_params)
                 quantizers["model.layers.%d.%s" % (layer_index, sublayer_name)] = ()  # to be updated
 
-                print("DEBUG")
+                print("DEBUG - UNINDENT NEXT LINES ")
                 print("PREPARING TO FINETUNE")
                 print(layer)
                 layer = finetune_groupwise(layer=layer, inps=inps, outs=outs, args=args, **forward_args)
