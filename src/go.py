@@ -55,21 +55,27 @@ def finetune_groupwise(
 
     # initialize trainable parameters on main device
     #TODO this code is a mess; unfuck it
+    # TODO -- vvvvvvvv CRAPPY CODE THAT SHOULD BE REFACTORED vvvvvvvv
     # intent: for each replica, store a pair (submodule, name) where to put each trainable param
     differentiable_parameters_by_name = {name: param for name, param in layer.named_parameters() if param.requires_grad}
     differentiable_parameters = nn.ParameterList(list(differentiable_parameters_by_name.values()))
     substitution_tables = []
     if replicas:
+        param_to_name = {param: name for name, param in differentiable_parameters_by_name}
+        param_occurences = defaultdict(list)   # param_name -> List [ Tuple [submodule name, attr name] ]
+        for submodule_name, submodule in layer.named_modules():
+            for attr_name, param in submodule.named_parameters(recurse=False):  # immediate params (excluding children)
+                if param in param_to_name:
+                    param_name = param_to_name[param]
+                    param_occurences[param_name].append((submodule_name, attr_name))
+
+
         for replica in replicas:
             substitution_table = defaultdict(list)  # master param -> List[ Tuple[replica submodule, attr name] ]
-            replica_param_to_name = {param: name for name, param in replica.named_parameters() if name in differentiable_parameters_by_name}
-            for submodule in replica.modules():
-                for attr_name, replica_param in submodule.named_parameters(recurse=False):  # immediate params (excluding children)
-                    if replica_param in replica_param_to_name:
-                        param_name = replica_param_to_name[replica_param]
-                        master_param = differentiable_parameters_by_name[param_name]
-                        substitution_table[master_param].append((submodule, attr_name))
-            print(" REPLICA NAMED PARAMETERS", list(replica.named_parameters()))
+            replica_modules_by_name: Dict[str, nn.Module] = dict(replica.named_modules())
+            for param_name, occurences in param_occurences.items():
+                for submodule_name, attr_name in occurences:
+                    substitution_table[param_name].append((replica_modules_by_name[substitution_table], attr_name))
             print(substitution_table)
             for master_param in differentiable_parameters:
                 assert master_param in substitution_table
