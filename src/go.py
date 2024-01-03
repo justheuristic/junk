@@ -14,7 +14,6 @@ from src.utils import iterate_minibatches
 
 @torch.enable_grad()
 def finetune_groupwise(
-    self,
     *,
     layer: nn.Module,
     inps: Sequence[torch.Tensor],
@@ -42,8 +41,8 @@ def finetune_groupwise(
     # replicate non-trainable parameters to each GPU
     replicas = kwargs_by_device = None
     if len(args.devices) > 1:
-        replicas = torch.nn.parallel.replicate(layer, self.devices)
-        replicas[0] = self
+        replicas = torch.nn.parallel.replicate(layer, args.devices)
+        replicas[0] = layer
         kwargs_by_device = []
         for device in args.devices:
             kwargs_by_device.append({k: (v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v)
@@ -62,7 +61,6 @@ def finetune_groupwise(
     ]  # TODO maybe add asynchronous host-to-device copy here
 
 
-
     previous_best_loss = float('inf')  # for early stopping
     for epoch in range(args.max_epochs):
         for step in range(args.steps_per_epoch):
@@ -75,7 +73,7 @@ def finetune_groupwise(
                 raise ValueError(f"Fine-tuning loss is {loss}")
             if step == 0 and args.relative_mse_tolerance is not None:
                 if loss.item() / previous_best_loss > (1.0 - args.relative_mse_tolerance):
-                    return self.quantized_weight  # early stopping; no updates after last epoch's beam search
+                    return layer  # early stopping; no updates after last epoch's beam search
                 previous_best_loss = min(previous_best_loss, loss.item())
 
             opt.zero_grad()
