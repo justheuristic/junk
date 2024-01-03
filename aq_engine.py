@@ -8,12 +8,12 @@ import torch
 import torch.nn as nn
 from torch.nn.parallel.scatter_gather import Gather
 
-from src.aq import QuantizedLinear
+from src.aq import QuantizedWeight
 from src.utils import ellipsis
 
 
 class AQEngine(nn.Module):
-    """A wrapper class that runs AQ training for a single linear layer. All the important math is in QuantizedLinear"""
+    """A wrapper class that runs AQ training for a single linear layer. All the important math is in aq.py"""
 
     def __init__(self, layer: nn.Linear, accumultor_dtype: torch.dtype = torch.float64):
         super().__init__()
@@ -22,7 +22,7 @@ class AQEngine(nn.Module):
         self.columns = self.layer.weight.data.shape[1]
         self.register_buffer("XTX", torch.zeros(
             (self.columns, self.columns), dtype=accumultor_dtype, device=self.device))
-        self.quantized_weight: Optional[QuantizedLinear] = None
+        self.quantized_weight: Optional[QuantizedWeight] = None
         self.nsamples = 0
 
     @torch.no_grad()
@@ -40,11 +40,11 @@ class AQEngine(nn.Module):
         self.XTX += inp.matmul(inp.t())
 
     @torch.enable_grad()
-    def quantize(self, *, args: Namespace, verbose=True) -> QuantizedLinear:
+    def quantize(self, *, args: Namespace, verbose=True) -> QuantizedWeight:
         """ create a QuantizedLinear with specified args based on the collected hessian (XTX) data"""
         assert isinstance(args.devices, (list, tuple)) and len(args.devices) >= 1, f"Found devices = {args.devices}"
         assert args.devices[0] == self.device, (args.devices[0], self.XTX.device)
-        self.quantized_weight = QuantizedLinear(
+        self.quantized_weight = QuantizedWeight(
             XTX=self.XTX.to(device=self.device, dtype=torch.float32),
             reference_weight=self.layer.weight.detach().to(device=self.device, dtype=torch.float32),
             out_group_size=args.out_group_size,

@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.nn.parallel.scatter_gather import Gather
 
 from aq_engine import replace_parameter_
-from src.aq import QuantizedLinear
+from src.aq import QuantizedWeight
 from src.utils import iterate_minibatches
 
 
@@ -22,7 +22,7 @@ def finetune_groupwise(
     args: Namespace,
     verbose=True,
     kwargs,
-) -> QuantizedLinear:
+) -> QuantizedWeight:
     """
     Fine-tune a module with pre-quantized linear layers so as to minimize MSE between layer-wise inps/outs
 
