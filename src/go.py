@@ -69,7 +69,7 @@ def finetune_groupwise(
                         param_name = replica_param_to_name[replica_param]
                         master_param = differentiable_parameters_by_name[param_name]
                         substitution_table[master_param].append((submodule, attr_name))
-            print(" REPLICA PARAM BY NAME", replica_param_to_name)
+            print(" REPLICA NAMED PARAMETERS", list(replica.named_parameters()))
             print(substitution_table)
             for master_param in differentiable_parameters:
                 assert master_param in substitution_table
