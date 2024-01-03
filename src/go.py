@@ -36,7 +36,11 @@ def finetune_groupwise(
     assert len(inps) == len(outs) == len(args.devices)
     for i in range(len(args.devices)):
         assert isinstance(inps[i], torch.Tensor) and isinstance(outs[i], torch.Tensor)
-        assert inps[i].device == outs[i].device == args.devices[i], (inps[i].device, outs[i].device, args.devices)
+        if not args.offload_activations:
+            assert inps[i].device == outs[i].device == args.devices[i], (inps[i].device, outs[i].device, args.devices)
+        else:
+            assert inps[i].device == outs[i].device == torch.device('cpu')
+            assert inps[i].is_pinned() and outs[i].is_pinned()
 
     # replicate non-trainable parameters to each GPU
     replicas = kwargs_by_device = None
