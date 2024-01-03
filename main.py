@@ -210,10 +210,10 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
                 print("curent_avg_bits", overall_bits / model_number_of_params)
                 quantizers["model.layers.%d.%s" % (layer_index, sublayer_name)] = ()  # to be updated
 
-                print("PREPARING TO FINETUNE")
-                print(layer)
-                layer = finetune_groupwise(layer=layer, inps=inps, outs=outs, args=args, **forward_args)
-                print("FINISHED FINETUNING")
+            print("PREPARING TO FINETUNE")
+            print(layer)
+            layer = finetune_groupwise(layer=layer, inps=inps, outs=outs, args=args, **forward_args)
+            print("FINISHED FINETUNING")
 
         if len(args.devices) == 1:
             assert len(inps) == len(outs) == 1
