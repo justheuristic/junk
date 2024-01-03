@@ -538,7 +538,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_go_epochs",
         type=int,
-        default=5,
+        default=1000,
         help="Run this many passes over training data when doing global optimization; no means skip GO"
     )
     parser.add_argument(
