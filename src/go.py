@@ -68,7 +68,7 @@ def finetune_groupwise(
                 if param in param_to_name:
                     param_name = param_to_name[param]
                     param_occurences[param_name].append((submodule_name, attr_name))
-
+        assert len(param_occurences) == len(differentiable_parameters), "internal error: not all trainable parameters were found"
 
         for replica in replicas:
             substitution_table = defaultdict(list)  # master param -> List[ Tuple[replica submodule, attr name] ]
@@ -77,8 +77,6 @@ def finetune_groupwise(
                 for submodule_name, attr_name in occurences:
                     substitution_table[param_name].append((replica_modules_by_name[substitution_table], attr_name))
             print(substitution_table)
-            for master_param in differentiable_parameters:
-                assert master_param in substitution_table
             substitution_tables.append(substitution_table)
 
     print(substitution_tables)
