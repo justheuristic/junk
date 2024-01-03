@@ -10,7 +10,7 @@ from tqdm import trange
 from tqdm.auto import trange
 from transformers import PreTrainedModel
 
-from aq_engine import AQUtil
+from aq_engine import AQEngine
 from src.datautils import get_loaders
 from src.modelutils import (
     FALCON_TYPES,
@@ -89,7 +89,8 @@ def get_inps(model: PreTrainedModel, data_iterable: Iterable, args: Namespace, n
     nsamples_per_device = (nsamples - 1) // len(args.devices) + 1
     inps = [torch.zeros(
         (min(nsamples_per_device, nsamples - i * nsamples_per_device), model.seqlen, model.config.hidden_size),
-        dtype=dtype, device=args.devices[i] if not args.offload_activations else "cpu")
+        dtype=dtype, device=args.devices[i] if not args.offload_activations else "cpu",
+        pin_memory=args.offload_activations)
         for i in range(len(args.devices))
     ]
     forward_arg_names = [
@@ -143,7 +144,7 @@ def get_inps(model: PreTrainedModel, data_iterable: Iterable, args: Namespace, n
 def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
     print("\nStarting AQ quantization ...")
     inps, forward_args = get_inps(model, dataloader, args)
-    outs = [torch.zeros_like(inp_tensor) for inp_tensor in inps]
+    outs = [torch.zeros_like(inp_tensor, pin_memory=inp_tensor.is_pinned()) for inp_tensor in inps]
 
     use_cache = model.config.use_cache
     model.config.use_cache = False
@@ -251,7 +252,7 @@ def perplexity_eval(model, testenc, args):
     model.config.use_cache = False
 
     inps, forward_args = get_inps(model, testenc, args, nsamples=nsamples)
-    outs = [torch.zeros_like(inp_tensor) for inp_tensor in inps]
+    outs = [torch.zeros_like(inp_tensor, pin_memory=inp_tensor.is_pinned()) for inp_tensor in inps]
     device = args.devices[0]
     for k, v in forward_args.items():
         forward_args[k] = v.to(device) if isinstance(v, torch.Tensor) else v
@@ -298,7 +299,7 @@ def perplexity_eval(model, testenc, args):
 @torch.no_grad()
 def init_aq_engines(layer: nn.Module, names: Sequence[str],
                     inps_tensor: torch.Tensor, outs_tensor: torch.Tensor, **forward_args: Dict[str, Any]
-                    ) -> Dict[str, AQUtil]:
+                    ) -> Dict[str, AQEngine]:
     """
     Create a dictionary of AQUtil instances for each quantized layer;
     Run forward pass on each sample in inps_tensor; write output activations to outs_tensor (in-plance)
@@ -316,7 +317,7 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
     assert len(subset) > 0
     aq_handlers = {}
     for sublayer_name in subset:
-        aq_handlers[sublayer_name] = AQUtil(subset[sublayer_name])
+        aq_handlers[sublayer_name] = AQEngine(subset[sublayer_name])
 
     # wrap all quantized sub-layers with a wrapper that accumulates inputs on forward
     # note: the code below uses wrappers instead of hooks because hooks cause bugs in multi-gpu code
@@ -341,7 +342,7 @@ def init_aq_engines(layer: nn.Module, names: Sequence[str],
 
 
 class _LayerWrapperThatAccumulatesXTX(nn.Module):
-    def __init__(self, layer: nn.Module, aq_handler: AQUtil):
+    def __init__(self, layer: nn.Module, aq_handler: AQEngine):
         super().__init__()
         self.wrapped_layer, self.aq_handler = layer, aq_handler
     def forward(self, input, *args, **kwargs):
@@ -362,7 +363,7 @@ def init_aq_engines_parallel(devices: Sequence[torch.device], layer: nn.Module, 
         inputs_by_device.append((layer_replicas[i], names, inps[i], outs[i]))
         kwargs_by_device.append({k: (v.to(devices[i], non_blocking=True) if isinstance(v, torch.Tensor) else v)
                                  for k, v in forward_args.items()})
-    aq_handles_by_device: Sequence[Dict[str, AQUtil]] = torch.nn.parallel.parallel_apply(
+    aq_handles_by_device: Sequence[Dict[str, AQEngine]] = torch.nn.parallel.parallel_apply(
         funcs_by_device, inputs_by_device, kwargs_by_device, devices=devices)
     aq_handlers = aq_handles_by_device[0]
     for key, aq_handler in aq_handlers.items():

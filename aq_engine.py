@@ -8,12 +8,12 @@ import torch
 import torch.nn as nn
 from torch.nn.parallel.scatter_gather import Gather
 
-from src.aq import QuantizedWeight
+from src.aq import QuantizedLinear
 from src.utils import ellipsis
 
 
-class AQUtil(nn.Module):
-    """A wrapper class that runs AQ training for a single linear layer. All the important math is in QuantizedWeight """
+class AQEngine(nn.Module):
+    """A wrapper class that runs AQ training for a single linear layer. All the important math is in QuantizedLinear"""
 
     def __init__(self, layer: nn.Linear, accumultor_dtype: torch.dtype = torch.float64):
         super().__init__()
@@ -22,7 +22,7 @@ class AQUtil(nn.Module):
         self.columns = self.layer.weight.data.shape[1]
         self.register_buffer("XTX", torch.zeros(
             (self.columns, self.columns), dtype=accumultor_dtype, device=self.device))
-        self.quantized_weight: Optional[QuantizedWeight] = None
+        self.quantized_weight: Optional[QuantizedLinear] = None
         self.nsamples = 0
 
     @torch.no_grad()
@@ -40,16 +40,11 @@ class AQUtil(nn.Module):
         self.XTX += inp.matmul(inp.t())
 
     @torch.enable_grad()
-    def quantize(
-        self,
-        *,
-        verbose=True,
-        args: Namespace,
-    ) -> QuantizedWeight:
-        """ create a QuantizedWeight based on the collected hessian (XTX) data"""
+    def quantize(self, *, args: Namespace, verbose=True) -> QuantizedLinear:
+        """ create a QuantizedLinear with specified args based on the collected hessian (XTX) data"""
         assert isinstance(args.devices, (list, tuple)) and len(args.devices) >= 1, f"Found devices = {args.devices}"
         assert args.devices[0] == self.device, (args.devices[0], self.XTX.device)
-        self.quantized_weight = QuantizedWeight(
+        self.quantized_weight = QuantizedLinear(
             XTX=self.XTX.to(device=self.device, dtype=torch.float32),
             reference_weight=self.layer.weight.detach().to(device=self.device, dtype=torch.float32),
             out_group_size=args.out_group_size,
@@ -136,7 +131,7 @@ class AQUtil(nn.Module):
 
     def _compute_mse_parallel(self,
                               devices: Sequence[torch.device],
-                              replicas: Sequence[AQUtil],
+                              replicas: Sequence[AQEngine],
                               parameters_to_replicate: nn.ParameterDict) -> torch.Tensor:
         """Compute MSE in parallel over output channels"""
         replicated_parameters = torch.nn.parallel.replicate(parameters_to_replicate, devices, detach=False)
@@ -163,7 +158,7 @@ class AQUtil(nn.Module):
             self.XTX.to(dtype), reference_weight, selection=selection, **kwargs).clone()
 
     @torch.no_grad()
-    def beam_search_update_codes_(self, devices: Sequence[torch.device], replicas: Sequence[AQUtil],
+    def beam_search_update_codes_(self, devices: Sequence[torch.device], replicas: Sequence[AQEngine],
                                   parameters_to_replicate: nn.ParameterDict, seed: Optional[int] = None, **kwargs):
         """Update self.quantized_weight.codes in-place via beam search"""
         if len(devices) == 1:  # single device

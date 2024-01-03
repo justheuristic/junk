@@ -1,17 +1,19 @@
+""" Core mathematics for Additive Quantization (AQ): initialization, reconstruction and beam search"""
 import random
-from typing import Optional, Tuple, Any, Dict, List, Union
+from typing import Optional, Tuple, List, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from tqdm.auto import trange
 
 from src.kmeans import fit_kmeans, fit_kmeans_1d, fit_faiss_kmeans, find_nearest_cluster
-from src.rrr import reduced_rank_regression_from_weight
+from src.brrr import reduced_rank_regression_from_weight
 from src.utils import maybe_script, ellipsis
 
 
-class QuantizedWeight(nn.Module):
+class QuantizedLinear(nn.Module):
     EPS = 1e-9
 
     def __init__(self, *,
@@ -541,7 +543,7 @@ def init_aq_kmeans(reference_weight: torch.Tensor, *,
                    max_iter: int = 1000, devices: Optional[List[torch.device]] = None, **kwargs):
     """
     Create initial codes and codebooks using residual K-means clustering of weights
-    :params reference_weight, num_codebooks, out_group_size, in_group_size, nbits, verbose: same as in QuantizedWeight
+    :params reference_weight, num_codebooks, out_group_size, in_group_size, nbits, verbose: same as in QuantizedLinear
     :params use_faiss  whether to use faiss implementation of kmeans or pure torch
     :params max_point_per_centorid maximum data point per cluster
     :param kwargs: any additional params are forwarded to fit_kmeans
