@@ -111,9 +111,10 @@ def finetune_groupwise(
         loss_numerator = loss_denominator = 0
         for step in range(steps_per_epoch):
             if len(args.devices) == 1:
-                loss = _compute_mse_on_batch(args.devices[0], layer, batch_iterators[0], **kwargs)
+                loss = _compute_mse_on_batch(layer, batch_iterators[0], **kwargs)
             else:
-                loss = _compute_mse_parallel(args.devices, replicas, differentiable_parameters, substitution_tables, batch_iterators, kwargs_by_device)
+                loss = _compute_mse_parallel(args.devices, replicas, differentiable_parameters, substitution_tables,
+                                             batch_iterators, kwargs_by_device)
 
             if not torch.isfinite(loss).item():
                 raise ValueError(f"Fine-tuning loss is {loss}")
@@ -144,14 +145,14 @@ def finetune_groupwise(
 
 
 def _compute_mse_on_batch(
-        device: torch.device, layer: nn.Module, batch_iter: Iterator[Tuple[torch.Tensor, torch.Tensor]], **kwargs) -> torch.Tensor:
+        layer: nn.Module, batch_iter: Iterator[Tuple[torch.Tensor, torch.Tensor]], **kwargs) -> torch.Tensor:
     """
     Compute the activation MSE error between transformer layers
-    TODO docs
+    :param
     """
     inps_batch, outs_batch = next(batch_iter)
-    inps_batch = inps_batch.to(device, dtype=torch.float32, non_blocking=True)  # TODO this should be prefetched
-    outs_batch = outs_batch.to(device, dtype=torch.float32, non_blocking=True)  # TODO this should be prefetched; when prefetched, remove device arg frokm this function
+    inps_batch = inps_batch.to(dtype=torch.float32)
+    outs_batch = outs_batch.to(dtype=torch.float32)
 
     # TODO un-hardcode this
     if 'attention_mask' in kwargs:
@@ -182,7 +183,7 @@ def _compute_mse_parallel(devices: Sequence[torch.device],
             for replacement_param, param_substitutions in zip(replicated_parameters[i], substitution_tables[i]):
                 for (replica_submodule, attr_name) in param_substitutions:
                     replace_parameter_(replica_submodule, attr_name, replacement_param)
-        inputs_by_replica.append((devices[i], replicas[i], batch_iterators[i]))
+        inputs_by_replica.append((replicas[i], batch_iterators[i]))
     mse_components = torch.nn.parallel.parallel_apply(
         funcs_by_replica, inputs_by_replica, kwargs_by_device, devices=devices)
     return Gather.apply(devices[0], 0, *(mse.view(1) for mse in mse_components)).mean()
