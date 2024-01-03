@@ -92,9 +92,15 @@ def _compute_mse_on_batch(layer: nn.Module, batch_iter: Iterator[Tuple[torch.Ten
     TODO docs
     """
     inps_batch, outs_batch = next(batch_iter)
-    outs_prediction = layer(inps_batch, **kwargs)
-    assert isinstance(outs_prediction, tuple) and outs_prediction[0].shape == outs_batch.shape
-    return F.mse_loss(outs_prediction[0], outs_batch)
+    # TODO un-hardcode this
+    if 'attention_mask' in kwargs:
+        assert kwargs['attention_mask'].ndim == 4
+        assert kwargs['attention_mask'].shape[0] == 1
+        kwargs = dict(kwargs, attention_mask=kwargs['attention_mask'].tile(len(inps_batch), 1, 1, 1))
+
+    outs_prediction, *_unused = layer(inps_batch, **kwargs)
+    assert outs_prediction.shape == outs_batch.shape
+    return F.mse_loss(outs_prediction, outs_batch)
 
 def _substitute_and_compute_mse(layer: nn.Module, *args, overrides: nn.ParameterDict, **kwargs) -> torch.Tensor:
     """Utility for parallelism: replace the specified parameters of layer, then compute MSE"""
