@@ -120,6 +120,8 @@ def finetune_groupwise(
             if verbose and (epoch * steps_per_epoch + step) % args.print_frequency == 0:
                 print(f"epoch={epoch}\tstep={step}\tloss={loss_numerator / loss_denominator:.10f}\t")
 
+        if verbose and (epoch * steps_per_epoch + step) % args.print_frequency != 0:
+            print(f"epoch={epoch}\tstep={step}\tloss={loss_numerator / loss_denominator:.10f}\t")
         # TODO MAYBE RUN EVAL HERE?!
         if args.go_relative_mse_tolerance is not None:
             epoch_loss = loss_numerator / loss_denominator
