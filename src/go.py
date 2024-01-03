@@ -32,6 +32,7 @@ def finetune_groupwise(
     :param args: quantization hyperparameters from main.py
     :param kwargs: additional keyword arguments to be passed into layer on each forward
     """
+    layer = layer.float()  # <-- TODO UNHARDCODE
     assert isinstance(args.devices, (list, tuple)) and len(args.devices) >= 1, f"Found devices = {args.devices}"
     assert isinstance(inps, (list, tuple)) and isinstance(inps, (list, tuple))
     assert len(inps) == len(outs) == len(args.devices)
@@ -129,6 +130,7 @@ def _compute_mse_on_batch(
     Compute the activation MSE error between transformer layers
     TODO docs
     """
+    print(end=f"{device} - {layer.self_attn.q_proj.quantized_weight.scales.sum().item()}\n")
     inps_batch, outs_batch = next(batch_iter)
     inps_batch = inps_batch.to(device, dtype=torch.float32, non_blocking=True)  # TODO this should be prefetched
     inps_batch = inps_batch.to(device, dtype=torch.float32, non_blocking=True)  # TODO this should be prefetched; when prefetched, remove device arg frokm this function
