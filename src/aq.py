@@ -12,6 +12,21 @@ from src.kmeans import fit_kmeans, fit_kmeans_1d, fit_faiss_kmeans, find_nearest
 from src.brrr import reduced_rank_regression_from_weight
 from src.utils import maybe_script, ellipsis
 
+from typing import Optional
+
+
+class QuantizedLinear(nn.Module):
+    def __init__(self, quantized_weight, bias: Optional[nn.Parameter]):
+        super().__init__()
+        self.out_features, self.in_features = quantized_weight.out_features, quantized_weight.in_features
+        self.quantized_weight = quantized_weight
+        self.bias = bias
+
+    def forward(self, input: torch.Tensor):
+        # TODO this can be optimized! (after we're sure the idea works)
+        # TODO maybe integrate with QuantizedLinear?
+        return F.linear(input, self.quantized_weight(), self.bias)
+
 
 class QuantizedWeight(nn.Module):
     EPS = 1e-9

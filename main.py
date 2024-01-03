@@ -11,6 +11,8 @@ from tqdm.auto import trange
 from transformers import PreTrainedModel
 
 from aq_engine import AQEngine
+from src.aq import QuantizedLinear
+from src.go import finetune_groupwise
 from src.datautils import get_loaders
 from src.modelutils import (
     FALCON_TYPES,
@@ -179,25 +181,39 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
 
             for sublayer_name in aq_handlers.keys():
                 print(f"Quantizing module {sublayer_name} of layer {layer_index}")
-                quantized = aq_handlers[sublayer_name].quantize(args=args, verbose=True)
+                quantized_weight = aq_handlers[sublayer_name].quantize(args=args, verbose=True)
+
+                with torch.no_grad():
+                    assert aq_handlers[sublayer_name].layer.weight in set(layer.parameters())  # test that this is not a replica
+
+                    new_linear = QuantizedLinear(quantized_weight, aq_handlers[sublayer_name].layer.bias)
+                    found_original = False
+                    for module in layer.modules():
+                        for child_name, child_module in module.named_children():
+                            if child_module is aq_handlers[sublayer_name].layer:
+                                setattr(module, child_name, new_linear)
+                                found_original = True  # note: do not break to handle tied layers
+
+                    assert found_original, f"could not find {sublayer_name}"
 
                 if save:
-                    quantized.name = sublayer_name
+                    raise NotImplementedError("NEED TO SAVE LATER, AFTER FINETUNING!")
+                    quantized_weight.name = sublayer_name
                     full_path = save + "/" + str(layer_index) + "/"
                     os.makedirs(full_path, exist_ok=True)
                     print("Saving...")
-                    torch.save(quantized, full_path + sublayer_name)
+                    torch.save(quantized_weight, full_path + sublayer_name)
 
-                with torch.no_grad():
-                    assert aq_handlers[sublayer_name].layer.weight in set(layer.parameters())
-                    aq_handlers[sublayer_name].layer.weight.data = quantized().to(
-                        aq_handlers[sublayer_name].layer.weight.data.dtype)
-
-                weight_avg_bits = quantized.estimate_nbits_per_parameter()
+                weight_avg_bits = quantized_weight.estimate_nbits_per_parameter()
                 overall_bits += int(weight_avg_bits * torch.numel(aq_handlers[sublayer_name].layer.weight.data))
                 model_number_of_params += torch.numel(aq_handlers[sublayer_name].layer.weight.data)
                 print("curent_avg_bits", overall_bits / model_number_of_params)
                 quantizers["model.layers.%d.%s" % (layer_index, sublayer_name)] = ()  # to be updated
+
+                print("PREPARING TO FINETUNE")
+                print(layer)
+                layer = finetune_groupwise(layer=layer, inps=inps, outs=outs, args=args, **forward_args)
+                print("FINISHED FINETUNING")
 
         if len(args.devices) == 1:
             assert len(inps) == len(outs) == 1
