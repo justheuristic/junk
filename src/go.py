@@ -50,7 +50,7 @@ def finetune_groupwise(
         kwargs_by_device = []
         for device in args.devices:
             kwargs_by_device.append({k: (v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v)
-                                     for k, v in kwargs_by_device.items()})
+                                     for k, v in kwargs.items()})
 
     # initialize trainable parameters on main device
     differentiable_parameters = nn.ParameterDict(
