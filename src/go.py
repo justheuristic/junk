@@ -90,17 +90,23 @@ def finetune_groupwise(
     opt = torch.optim.Adam(differentiable_parameters, lr=args.go_lr, betas=(0.9, 0.95), amsgrad=True) #TODO do we really need beta1?
 
     assert args.batch_size % len(args.devices) == 0, "batch_size must be divisible by the number of GPUs"
-    per_device_batch_size = args.batch_size // len(args.devices)
+
     num_samples_per_device = len(inps[0])
+    local_batch_size = args.batch_size // len(args.devices) if args.local_batch_size is None else args.local_batch_size
+
+
     assert all(len(inps_tensor) == num_samples_per_device for inps_tensor in inps)
-    assert num_samples_per_device % per_device_batch_size == 0, (num_samples_per_device, per_device_batch_size)
-    steps_per_epoch = num_samples_per_device // per_device_batch_size
+    assert args.batch_size % (local_batch_size * len(args.devices)) == 0, ""
+    num_accumulation_steps = args.batch_size // (local_batch_size * len(args.devices))
+    assert num_samples_per_device % local_batch_size * num_accumulation_steps == 0, (num_samples_per_device, local_batch_size)
+    steps_per_epoch = num_samples_per_device * len(args.devices) // args.batch_size
     batch_iterators = [
-        iterate_minibatches(inps[i], outs[i], batch_size=per_device_batch_size)
+        iterate_minibatches(inps[i], outs[i], batch_size=local_batch_size)
         for i in range(len(args.devices))
     ]  # TODO maybe add asynchronous host-to-device copy here if args.offload_activations
 
     previous_best_loss = float('inf')  # for early stopping
+    steps_accumulated = 0
     for epoch in range(args.max_go_epochs):
         loss_numerator = loss_denominator = 0
         for step in range(steps_per_epoch):
@@ -112,9 +118,14 @@ def finetune_groupwise(
             if not torch.isfinite(loss).item():
                 raise ValueError(f"Fine-tuning loss is {loss}")
 
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
+            (loss / num_accumulation_steps).backward()
+            steps_accumulated += 1
+
+            if steps_accumulated >= num_accumulation_steps:
+                opt.step()
+                opt.zero_grad()
+                steps_accumulated = 0
+
             loss_numerator += loss.item()
             loss_denominator += 1
             if verbose and (epoch * steps_per_epoch + step) % args.print_frequency == 0:
@@ -122,7 +133,7 @@ def finetune_groupwise(
 
         if verbose and (epoch * steps_per_epoch + step) % args.print_frequency != 0:
             print(f"epoch={epoch}\tstep={step}\tloss={loss_numerator / loss_denominator:.10f}\t")
-        # TODO MAYBE RUN EVAL HERE?!
+
         if args.go_relative_mse_tolerance is not None:
             epoch_loss = loss_numerator / loss_denominator
             if epoch_loss / previous_best_loss > (1.0 - args.go_relative_mse_tolerance):

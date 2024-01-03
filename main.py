@@ -626,6 +626,13 @@ if __name__ == "__main__":
         help="Train on this many sequences when fine-tuning the layer (GO), globally across all GPUs",
     )
     parser.add_argument(
+        "--local_batch_size",
+        type=int,
+        default=None,
+        help="Per-device and per-forward-pass batch size used to accumulate global --batch_size",
+
+    )
+    parser.add_argument(
         "--sparsity_regularizer",
         type=float,
         default=0,
