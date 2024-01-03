@@ -99,7 +99,7 @@ def _compute_mse_on_batch(
     """
     inps_batch, outs_batch = next(batch_iter)
     inps_batch = inps_batch.to(device, non_blocking=True)  # TODO this should be prefetched
-    inps_batch = inps_batch.to(device, non_blocking=True)  # TODO this should be prefetched
+    inps_batch = inps_batch.to(device, non_blocking=True)  # TODO this should be prefetched; when prefetched, remove device arg frokm this function
 
     # TODO un-hardcode this
     if 'attention_mask' in kwargs:
