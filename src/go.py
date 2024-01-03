@@ -69,6 +69,7 @@ def finetune_groupwise(
                         param_name = replica_param_to_name[replica_param]
                         master_param = differentiable_parameters_by_name[param_name]
                         substitution_table[master_param].append((submodule, attr_name))
+            print(substitution_table)
             for master_param in differentiable_parameters:
                 assert master_param in substitution_table
             substitution_tables.append(substitution_table)
@@ -142,7 +143,8 @@ def _substitute_and_compute_mse(device: torch.device, layer: nn.Module, batch_it
 
 def _compute_mse_parallel(devices: Sequence[torch.device],
                           replicas: Sequence[nn.Module],
-                          parameters_to_replicate: nn.ParameterDict,
+                          parameters_to_replicate: nn.ParameterList,
+                          substitution_tables: Sequence[Dict[nn.Parameter, Sequence[Tuple[nn.Module, str]]]],
                           batch_iterators: Sequence[Iterator[Tuple[torch.Tensor, torch.Tensor]]],
                           kwargs_by_device: Sequence[Dict[str, Any]]
                           ) -> torch.Tensor:
