@@ -14,6 +14,7 @@ from aq_engine import AQEngine
 from src.aq import QuantizedLinear
 from src.go import finetune_groupwise
 from src.datautils import get_loaders
+from src.utils import using_tf32
 from src.modelutils import (
     FALCON_TYPES,
     find_sublayers,
@@ -144,12 +145,14 @@ def get_inps(model: PreTrainedModel, data_iterable: Iterable, args: Namespace, n
 
 @torch.no_grad()
 def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
+    assert not torch.backends.cuda.matmul.allow_tf32
     print("\nStarting AQ quantization ...")
     inps, forward_args = get_inps(model, dataloader, args)
     outs = [torch.zeros_like(inp_tensor, pin_memory=inp_tensor.is_pinned()) for inp_tensor in inps]
 
     use_cache = model.config.use_cache
     model.config.use_cache = False
+
     save = getattr(args, "save", False)
 
     quantizers = {}
@@ -213,13 +216,10 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
             print("PREPARING TO FINETUNE")
             print(layer)
             layer = layer.to(dtype=torch.float32)
-            torch.backends.cudnn.allow_tf32 = True
-            torch.backends.cuda.matmul.allow_tf32 = True #TODO unhardcode
 
-            layer = finetune_groupwise(layer=layer, inps=inps, outs=outs, args=args, **forward_args)
+            with using_tf32(enabled=True):
+                layer = finetune_groupwise(layer=layer, inps=inps, outs=outs, args=args, **forward_args)
             layer = layer.to(dtype=torch.float16)  # TODO un-hardcode!
-            torch.backends.cudnn.allow_tf32 = False
-            torch.backends.cuda.matmul.allow_tf32 = False
             print("FINISHED FINETUNING")
 
         if len(args.devices) == 1:

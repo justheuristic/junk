@@ -57,6 +57,16 @@ def maybe_script(fn: callable) -> callable:
     return torch.jit.script(fn) if should_script else fn
 
 
+def using_tf32(enabled: bool):
+    was_cudnn = torch.backends.cudnn.allow_tf32
+    was_matmul = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cudnn.allow_tf32 = enabled
+    torch.backends.cuda.matmul.allow_tf32 = enabled  # TODO unhardcode
+    yield
+    torch.backends.cudnn.allow_tf32 = was_cudnn
+    torch.backends.cuda.matmul.allow_tf32 = was_matmul
+
+
 def iterate_minibatches(
         *tensors: torch.Tensor, batch_size: int, allow_incomplete: bool = True,
         callback: Callable[[Sequence[torch.Tensor]], Sequence[torch.Tensor]] = lambda x: x
