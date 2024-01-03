@@ -61,7 +61,8 @@ def finetune_groupwise(
 
 
     batch_iterators = [
-        iterate_minibatches(inps[i], outs[i], batch_size=args.batch_size) for i in range(len(args.devices))
+        iterate_minibatches(inps[i], outs[i], batch_size=args.batch_size)
+        for i in range(len(args.devices))
     ]  # TODO maybe add asynchronous host-to-device copy here
 
 
@@ -69,7 +70,7 @@ def finetune_groupwise(
     for epoch in range(args.max_epochs):
         for step in range(args.steps_per_epoch):
             if len(args.devices) == 1:
-                loss = _compute_mse_on_batch(layer, batch_iterators[0], **kwargs)
+                loss = _compute_mse_on_batch(args.devices[0], layer, batch_iterators[0], **kwargs)
             else:
                 loss = _compute_mse_parallel(args.devices, replicas, differentiable_parameters, batch_iterators, kwargs_by_device)
 
@@ -90,12 +91,16 @@ def finetune_groupwise(
     return layer
 
 
-def _compute_mse_on_batch(layer: nn.Module, batch_iter: Iterator[Tuple[torch.Tensor, torch.Tensor]], **kwargs) -> torch.Tensor:
+def _compute_mse_on_batch(
+        device: torch.device, layer: nn.Module, batch_iter: Iterator[Tuple[torch.Tensor, torch.Tensor]], **kwargs) -> torch.Tensor:
     """
     Compute the activation MSE error between transformer layers
     TODO docs
     """
     inps_batch, outs_batch = next(batch_iter)
+    inps_batch = inps_batch.to(device, non_blocking=True)  # TODO this should be prefetched
+    inps_batch = inps_batch.to(device, non_blocking=True)  # TODO this should be prefetched
+
     # TODO un-hardcode this
     if 'attention_mask' in kwargs:
         assert kwargs['attention_mask'].ndim == 4
@@ -107,11 +112,11 @@ def _compute_mse_on_batch(layer: nn.Module, batch_iter: Iterator[Tuple[torch.Ten
     return F.mse_loss(outs_prediction, outs_batch)
 
 
-def _substitute_and_compute_mse(layer: nn.Module, *args, overrides: nn.ParameterDict, **kwargs) -> torch.Tensor:
+def _substitute_and_compute_mse(device: torch.device, layer: nn.Module, batch_iter: Iterator, overrides: nn.ParameterDict, **kwargs) -> torch.Tensor:
     """Utility for parallelism: replace the specified parameters of layer, then compute MSE"""
     for param_name, param_value in overrides.items():
         replace_parameter_(layer, param_name, param_value)
-    return _compute_mse_on_batch(layer, *args, **kwargs)
+    return _compute_mse_on_batch(device, layer, batch_iter, **kwargs)
 
 
 def _compute_mse_parallel(devices: Sequence[torch.device],
@@ -123,9 +128,9 @@ def _compute_mse_parallel(devices: Sequence[torch.device],
     """Compute MSE in parallel over multiple GPUs, each GPU processes a portion of samples"""
     replicated_parameters = torch.nn.parallel.replicate(parameters_to_replicate, devices, detach=False)
     funcs_by_replica = [_substitute_and_compute_mse for _ in replicas]
-    inputs_by_replica = [(dict(), batch_iterators[0])]  # no overrides needed for 0-th replica
+    inputs_by_replica = [(devices[0], dict(), batch_iterators[0])]  # no overrides needed for 0-th replica
     for i in range(1, len(devices)):
-        inputs_by_replica.append((replicated_parameters[i], batch_iterators[i]))
+        inputs_by_replica.append((devices[0], replicated_parameters[i], batch_iterators[i]))
     mse_components = torch.nn.parallel.parallel_apply(
         funcs_by_replica, inputs_by_replica, kwargs_by_device, devices=devices)
     return Gather.apply(devices[0], 0, *(mse.view(1) for mse in mse_components)).mean()
