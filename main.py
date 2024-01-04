@@ -153,8 +153,6 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
     use_cache = model.config.use_cache
     model.config.use_cache = False
 
-    save = getattr(args, "save", False)
-
     quantizers = {}
     overall_bits = 0
     model_number_of_params = 0
@@ -199,14 +197,6 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
 
                     assert found_original, f"could not find {sublayer_name}"
 
-                if save:
-                    raise NotImplementedError("NEED TO SAVE LATER, AFTER FINETUNING!")
-                    quantized_weight.name = sublayer_name
-                    full_path = save + "/" + str(layer_index) + "/"
-                    os.makedirs(full_path, exist_ok=True)
-                    print("Saving...")
-                    torch.save(quantized_weight, full_path + sublayer_name)
-
                 weight_avg_bits = quantized_weight.estimate_nbits_per_parameter()
                 overall_bits += int(weight_avg_bits * torch.numel(aq_handlers[sublayer_name].layer.weight.data))
                 model_number_of_params += torch.numel(aq_handlers[sublayer_name].layer.weight.data)
@@ -221,6 +211,10 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
                 layer = finetune_groupwise(layer=layer, inps=inps, outs=outs, args=args, **forward_args)
             layer = layer.to(dtype=torch.float16)  # TODO un-hardcode!
             print("FINISHED FINETUNING")
+        if args.save:
+            os.makedirs(args.save, exist_ok=True)
+            print(f"Saving layer {layer_index}... to {os.path.join(args.save, str(layer_index))}")
+            torch.save(layer, os.path.join(args.save, str(layer_index)))
 
         if len(args.devices) == 1:
             assert len(inps) == len(outs) == 1
@@ -246,16 +240,16 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
         print(stats_payload)
 
     print("=====================\nFinal stats:")
-    if save:
-        torch.save(vars(args), save + "/args.pt")
+    if args.save:
+        torch.save(vars(args), args.save + "/args.pt")
         already_saved_weights = set()
-        for name, layer in nn.ModuleList(get_layers(model)).named_modules():
-            if isinstance(layer, (nn.Conv2d, nn.Linear)):
-                already_saved_weights.add(layer.weight)
+        for layer in get_layers(model):
+            for param in layer.parameters():
+                already_saved_weights.add(param)
         not_quantized_weights = {
             name: param for name, param in model.named_parameters() if param not in already_saved_weights
         }
-        torch.save(not_quantized_weights, save + "/not_quantized_weights.pt")
+        torch.save(not_quantized_weights, args.save + "/not_quantized_weights.pt")
 
     if args.wandb:
         wandb.log({"max_cuda_mem_quantize": round(torch.cuda.max_memory_allocated() / 1e9, 2)})
@@ -475,7 +469,7 @@ if __name__ == "__main__":
     parser.add_argument("--nsamples", type=int, default=None,
                         help="Number of calibration data samples.If None take all calibration data.")
     parser.add_argument("--load", type=str, default=None, help="Path to load quantized statistics.")
-    parser.add_argument("--save", type=str, default=False, help="Path to save quantized statistics.")
+    parser.add_argument("--save", type=str, default=None, help="Path to save quantized statistics.")
     parser.add_argument("--seed", type=int, default=0,
                         help="Seed for calibration data and initialization. "
                              "Note that the main training is not strictly deterministic.")

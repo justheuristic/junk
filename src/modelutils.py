@@ -151,6 +151,7 @@ def read_quant_weight_from_file(load_path, block_i, layer_name, device):
 
 
 def load_quantized_model(model, load_path):
+    raise NotImplementedError("TODO")
     layers = get_layers(model)
     for i in trange(len(layers)):
         layer = layers[i]
