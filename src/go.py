@@ -155,7 +155,7 @@ def _compute_mse_on_batch(
     outs_batch = outs_batch.to(dtype=torch.float32)
 
     # TODO un-hardcode this
-    if 'attention_mask' in kwargs:
+    if isinstance(kwargs.get('attention_mask'), torch.Tensor):
         assert kwargs['attention_mask'].ndim == 4
         assert kwargs['attention_mask'].shape[0] == 1
         kwargs = dict(kwargs, attention_mask=kwargs['attention_mask'].tile(len(inps_batch), 1, 1, 1))
