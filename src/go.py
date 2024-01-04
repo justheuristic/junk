@@ -116,12 +116,12 @@ def finetune_groupwise(
                 loss = _compute_mse_parallel(args.devices, replicas, differentiable_parameters, substitution_tables,
                                              batch_iterators, kwargs_by_device)
 
-            if not torch.isfinite(loss).item():
-                raise ValueError(f"Fine-tuning loss is {loss}")
 
             (loss / num_accumulation_steps).backward()
             steps_accumulated += 1
 
+            if not torch.isfinite(loss).item():
+                raise ValueError(f"Fine-tuning loss is {loss}")
             if steps_accumulated >= num_accumulation_steps:
                 opt.step()
                 opt.zero_grad()
@@ -139,7 +139,7 @@ def finetune_groupwise(
             epoch_loss = loss_numerator / loss_denominator
             if epoch_loss / previous_best_loss > (1.0 - args.go_relative_mse_tolerance):
                 return layer  # early stopping; no updates after last epoch's beam search
-            previous_best_loss = min(previous_best_lossepoch_loss, previous_best_loss)
+            previous_best_loss = min(epoch_loss, previous_best_loss)
 
     return layer
 
