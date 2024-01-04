@@ -213,8 +213,9 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
             print("FINISHED FINETUNING")
         if args.save:
             os.makedirs(args.save, exist_ok=True)
-            print(f"Saving layer {layer_index}... to {os.path.join(args.save, str(layer_index))}")
-            torch.save(layer, os.path.join(args.save, str(layer_index)))
+            layer_save_path = os.path.join(args.save, f"{layer_index}.pth")
+            print(f"Saving layer {layer_index}... to {layer_save_path}")
+            torch.save(layer, layer_save_path)
 
         if len(args.devices) == 1:
             assert len(inps) == len(outs) == 1
