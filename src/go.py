@@ -139,7 +139,7 @@ def finetune_groupwise(
             epoch_loss = loss_numerator / loss_denominator
             if epoch_loss / previous_best_loss > (1.0 - args.go_relative_mse_tolerance):
                 return layer  # early stopping; no updates after last epoch's beam search
-            previous_best_loss = min(previous_best_loss, previous_best_loss)
+            previous_best_loss = min(previous_best_lossepoch_loss, previous_best_loss)
 
     return layer
 
