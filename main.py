@@ -96,9 +96,7 @@ def get_inps(model: PreTrainedModel, data_iterable: Iterable, args: Namespace, n
         pin_memory=args.offload_activations)
         for i in range(len(args.devices))
     ]
-    forward_arg_names = [
-        "attention_mask",
-    ]
+    forward_arg_names = ["attention_mask", "position_ids"]
     if model.config.model_type.lower() in FALCON_TYPES:
         forward_arg_names.append("alibi")
 
