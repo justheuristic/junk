@@ -117,15 +117,12 @@ def get_inps(model: PreTrainedModel, data_iterable: Iterable, args: Namespace, n
     layers[0] = Catcher(layers[0])
     saved_num_threads = torch.get_num_threads()
     torch.set_num_threads(min(16, saved_num_threads))
-    for inps in data_iterable:
-        try:
-            if isinstance(inps, (list, tuple)):
-                inps, *_ = inps
-            inps = inps.to(device)
-            # call model.forward to trigger the Catcher
-            model(inps, attention_mask=torch.ones_like(inps))
-        except ValueError:
-            pass
+    for batch_inps in data_iterable:
+        if isinstance(batch_inps, (list, tuple)):
+            batch_inps, *_ = batch_inps
+        batch_inps = batch_inps.to(device)
+        # call model.forward to trigger the Catcher
+        model(batch_inps, attention_mask=torch.ones_like(batch_inps))
     torch.set_num_threads(saved_num_threads)
     layers[0] = layers[0].module
 
