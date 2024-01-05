@@ -156,13 +156,12 @@ def _compute_mse_on_batch(
     inps_batch = inps_batch.to(dtype=torch.float32)
     outs_batch = outs_batch.to(dtype=torch.float32)
 
-    # TODO un-hardcode this
-    for name, tensor in list(kwargs.items()):
-        if tensor.shape[0] == 1:
+    for name, value in list(kwargs.items()):
+        if isinstance(value, torch.Tensor) and value.shape[0] == 1:
             if name not in ('attention_mask', 'position_ids'):
                 warnings.warn(f"Tiling an unexpected kwarg {name} over batch size; make sure this is valid.")
-            repeats = [len(inps_batch)] + [1 for _ in range(tensor.ndim - 1)]
-            kwargs[name] = tensor.tile(*repeats)
+            repeats = [len(inps_batch)] + [1 for _ in range(value.ndim - 1)]
+            kwargs[name] = value.tile(*repeats)
 
     outs_prediction, *_unused = layer(inps_batch, **kwargs)
     assert outs_prediction.shape == outs_batch.shape
