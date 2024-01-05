@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import warnings
 from argparse import Namespace
 from collections import defaultdict
 from typing import Sequence, Iterator, Tuple, Dict, Any, List
@@ -157,14 +159,14 @@ def _compute_mse_on_batch(
     # TODO un-hardcode this
     for name, tensor in list(kwargs.items()):
         if tensor.shape[0] == 1:
-            assert name in 'attention_mask', 'position_ids'
+            if name not in ('attention_mask', 'position_ids'):
+                warnings.warn(f"Tiling an unexpected kwarg {name} over batch size; make sure this is valid.")
             repeats = [len(inps_batch)] + [1 for _ in range(tensor.ndim - 1)]
             kwargs[name] = tensor.tile(*repeats)
 
     outs_prediction, *_unused = layer(inps_batch, **kwargs)
     assert outs_prediction.shape == outs_batch.shape
     return F.mse_loss(outs_prediction, outs_batch)
-
 
 
 def _compute_mse_parallel(devices: Sequence[torch.device],
