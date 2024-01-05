@@ -100,7 +100,7 @@ def get_inps(model: PreTrainedModel, data_iterable: Iterable, args: Namespace, n
     if model.config.model_type.lower() in FALCON_TYPES:
         forward_arg_names.append("alibi")
 
-    cache = {"i": 0, "attention_mask": None, "alibi": None}
+    cache = {"i": 0, "alibi": None}
 
     class Catcher(nn.Module):
         def __init__(self, module):
@@ -117,12 +117,13 @@ def get_inps(model: PreTrainedModel, data_iterable: Iterable, args: Namespace, n
     layers[0] = Catcher(layers[0])
     saved_num_threads = torch.get_num_threads()
     torch.set_num_threads(min(16, saved_num_threads))
-    for batch in data_iterable:
+    for inps in data_iterable:
         try:
-            if isinstance(batch, (list, tuple)):
-                model(batch[0].to(device))
-            elif isinstance(batch, torch.Tensor):
-                model(batch.to(device))
+            if isinstance(inps, (list, tuple)):
+                inps, *_ = inps
+            inps = inps.to(device)
+            # call model.forward to trigger the Catcher
+            model(inps, attention_mask=torch.ones_like(inps))
         except ValueError:
             pass
     torch.set_num_threads(saved_num_threads)
