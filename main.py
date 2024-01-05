@@ -33,7 +33,7 @@ except ModuleNotFoundError:
     has_wandb = False
 
 
-def quantize_model(model, args, device):
+def quantize_model(model, args):
     """main entry point to functions for model quantization"""
     tick = time.time()
 
@@ -706,7 +706,7 @@ if __name__ == "__main__":
     
     if not args.load and not args.no_quant:
         print("\n============ Quantizing model... ============")
-        quantize_model(model, args, device)
+        quantize_model(model, args)
 
     print("\n============ Evaluating perplexity... ============")
     torch.cuda.reset_peak_memory_stats()
