@@ -44,6 +44,10 @@ def finetune_groupwise(
         else:
             assert inps[i].device == outs[i].device == torch.device('cpu')
             assert inps[i].is_pinned() and outs[i].is_pinned()
+    for name, param in layer.named_parameters():
+        if 'norm' in name:
+            print(f"Not training {name}")
+            param.requires_grad = False
 
     # replicate non-trainable parameters to each GPU
     replicas = kwargs_by_device = None
@@ -60,6 +64,9 @@ def finetune_groupwise(
     # TODO -- vvvvvvvv CRAPPY CODE THAT SHOULD BE REFACTORED vvvvvvvv
     # intent: for each replica, store a pair (submodule, name) where to put each trainable param
     differentiable_parameters_by_name = {name: param for name, param in layer.named_parameters() if param.requires_grad}
+
+
+
     param_names, differentiable_parameters = zip(*differentiable_parameters_by_name.items())
     differentiable_parameters = nn.ParameterList(differentiable_parameters)
     substitution_tables = []
