@@ -102,6 +102,9 @@ def get_inps(model: PreTrainedModel, data_iterable: Iterable, args: Namespace, n
 
     cache = {"i": 0, "alibi": None}
 
+    class CatcherExit(Exception):
+        pass
+
     class Catcher(nn.Module):
         def __init__(self, module):
             super().__init__()
@@ -112,17 +115,20 @@ def get_inps(model: PreTrainedModel, data_iterable: Iterable, args: Namespace, n
             cache["i"] += 1
             for forward_arg_name in forward_arg_names:
                 cache[forward_arg_name] = kwargs.get(forward_arg_name)
-            raise ValueError
+            raise CatcherExit()
 
     layers[0] = Catcher(layers[0])
     saved_num_threads = torch.get_num_threads()
     torch.set_num_threads(min(16, saved_num_threads))
     for batch_inps in data_iterable:
-        if isinstance(batch_inps, (list, tuple)):
-            batch_inps, *_ = batch_inps
-        batch_inps = batch_inps.to(device)
-        # call model.forward to trigger the Catcher
-        model(batch_inps, attention_mask=torch.ones_like(batch_inps))
+        try:
+            if isinstance(batch_inps, (list, tuple)):
+                batch_inps, *_ = batch_inps
+            batch_inps = batch_inps.to(device)
+            # call model.forward to trigger the Catcher
+            model(batch_inps, attention_mask=torch.ones_like(batch_inps))
+        except CatcherExit:
+            pass  # exit after catcher finished without running the rest of the model layers
     torch.set_num_threads(saved_num_threads)
     layers[0] = layers[0].module
 
