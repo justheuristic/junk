@@ -7,7 +7,7 @@ from transformers import AutoConfig, AutoModelForCausalLM
 
 MODEL_ERROR_MSG = "Unsupported model type {} - only 'llama', 'Yi', 'opt' and 'falcon' are supported"
 FALCON_TYPES = ("falcon", "refinedweb", "refinedwebmodel")
-LLAMA_LIKE = ("llama", "Yi")
+LLAMA_LIKE = ("llama", "Yi", "mistral")
 
 
 @contextmanager
@@ -49,7 +49,6 @@ def get_model(model_path, load_quantized=None, dtype="auto", model_seqlen=2048):
             )
     # Please verify correcttess #TODO
     model.seqlen = model_seqlen
-
     print("Model loaded sucessfully ...")
 
     return model

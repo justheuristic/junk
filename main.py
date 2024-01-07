@@ -164,7 +164,10 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
         stats_payload = {}
         start_time = time.time()
 
-        layer_device_original = next(layers[layer_index].parameters()).device  # quantized layer will return there
+        # quantized layer will return there
+        layer_device_original = next(layers[layer_index].parameters()).device  
+        # backup layer dtype
+        layer_dtype_original = next(layers[layer_index].parameters()).dtype
         print(f"{layer_device_original=}")
         layer = layers[layer_index].to(args.devices[0])
         for k, v in forward_args.items():
@@ -208,10 +211,9 @@ def quantize_aq(model: PreTrainedModel, dataloader: Iterable, args: Namespace):
             print("PREPARING TO FINETUNE")
             print(layer)
             layer = layer.to(dtype=torch.float32)
-
             with using_tf32(enabled=True):
                 layer = finetune_groupwise(layer=layer, inps=inps, outs=outs, args=args, **forward_args)
-            layer = layer.to(dtype=torch.float16)  # TODO un-hardcode!
+            layer = layer.to(dtype=layer_dtype_original)
             print("FINISHED FINETUNING")
         if args.save:
             os.makedirs(args.save, exist_ok=True)
@@ -652,7 +654,7 @@ if __name__ == "__main__":
         "--dtype",
         type=str,
         default="auto",
-        choices=["auto", "float16", "float32"],
+        choices=["auto", "float16", "float32", "bfloat16"],
         help="dtype to load the model in",
     )
     parser.add_argument("--wandb", action="store_true", help="Whether to use wandb or store locally.")
