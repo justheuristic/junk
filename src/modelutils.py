@@ -149,16 +149,43 @@ def read_quant_weight_from_file(load_path, block_i, layer_name, device):
     return torch.load(load_path + "/" + str(block_i) + "/" + layer_name, map_location=device)
 
 
-def load_quantized_model(model, load_path):
-    raise NotImplementedError("TODO")
+def load_linear_layers(layer, quant_layer):
+    for submodule in layer.modules():
+        for child_name, child_module in submodule.named_children():
+            if isinstance(child_module, (nn.Conv2d, nn.Linear)) or "norm" in child_name:
+                for quant_submodule in quant_layer.modules():
+                    for quant_child_name, quant_child_module in quant_submodule.named_children():
+                        if quant_child_name == child_name:
+                            if "norm" in child_name and not isinstance(child_module, (nn.Conv2d, nn.Linear)):
+                                print("norm", child_name)
+                                child_module.weight.data = quant_child_module.weight.data.to(
+                                    child_module.weight.dtype).to(child_module.weight.device)
+                            else:
+                                print(child_name)
+                                child_module.weight.data = quant_child_module.quantized_weight().data.to(
+                                    child_module.weight.dtype).to(child_module.weight.device)
+                            # Bias is not taked into account
+    return layer
+
+
+def load_dequantized_model(model, load_path):
+    """Load quantized model by dequantizing it"""
     layers = get_layers(model)
-    for i in trange(len(layers)):
-        layer = layers[i]
-        sub_layers = find_sublayers(layer)
-        for name in sub_layers:
-            quantized_weight = read_quant_weight_from_file(load_path, i, name, device=sub_layers[name].weight.device)
-            with torch.no_grad():
-                sub_layers[name].weight.data = quantized_weight().to(sub_layers[name].weight.data.dtype)
-        layers[i] = layer
+    for layer_index in range(len(layers)):
+        print("layer", layer_index)
+        layer = layers[layer_index]
+        quant_layer = torch.load(load_path + str(layer_index) + ".pth", map_location="cpu")
+        layers[layer_index] = load_linear_layers(layer, quant_layer)
+    model.load_state_dict(torch.load(load_path + "/not_quantized_weights.pt"), strict=False)
+    return model
+
+
+def load_quantized_model(model, load_path):
+    """Load quantized model"""
+
+    for i in range(len(model.model.layers)):
+        print(model.model.layers[i].input_layernorm.weight.device)
+        model.model.layers[i] = torch.load(load_path + str(i) + ".pth",
+                                           map_location=model.model.layers[i].input_layernorm.weight.device)
     model.load_state_dict(torch.load(load_path + "/not_quantized_weights.pt"), strict=False)
     return model

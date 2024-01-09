@@ -9,7 +9,7 @@ import torch
 sys.path.append("./lm-evaluation-harness")
 import lm_eval.models
 from lm_eval import evaluator, tasks, utils
-from src.modelutils import load_quantized_model
+from src.modelutils import load_dequantized_model
 try:
     import wandb
 
@@ -75,13 +75,6 @@ def pattern_match(patterns, source_list):
             task_names.add(matching)
     return list(task_names)
 
-def load_quantized_model_new(model,path):
-    for i in range(len(model.model.layers)):
-        print(model.model.layers[i].input_layernorm.weight.device)
-        model.model.layers[i] = torch.load(path+str(i)+".pth", map_location=model.model.layers[i].input_layernorm.weight.device)
-    model.load_state_dict(torch.load(path + "/not_quantized_weights.pt"), strict=False)
-    return model
-
 def main():
     args = parse_args()
 
@@ -119,12 +112,13 @@ def main():
     lm = lm_eval.models.get_model(args.model).create_from_arg_string(
         args.model_args, dict(batch_size=args.batch_size, device=args.device)
     )
+    print("lm.device", lm.device)
     if hasattr(lm.model, "hf_device_map"):
         print("Model device map:\n", lm.model.hf_device_map)
 
     if args.load:
         print("Loading quantized model ...")
-        lm.model = load_quantized_model_new(lm.model, args.load)
+        lm.model = load_dequantized_model(lm.model, args.load)
         lm.model.seqlen = args.model_seqlen
 
     results = evaluator.simple_evaluate(
