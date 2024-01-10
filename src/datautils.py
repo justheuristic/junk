@@ -4,8 +4,14 @@ from typing import Optional
 
 import numpy as np
 import torch
+import datasets
 from datasets import load_dataset
 from transformers import AutoTokenizer, LlamaTokenizer
+from packaging import version
+
+
+if not os.getenv("AQLM_SKIP_VERSION_CHECKS"):
+    assert version.parse("2.10.0") <= version.parse(datasets.__version__) <= version.parse("2.15.0")
 
 
 def set_seed(seed: Optional[int]):
