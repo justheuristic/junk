@@ -1,3 +1,4 @@
+import os
 from contextlib import contextmanager
 
 import torch
@@ -174,7 +175,7 @@ def load_dequantized_model(model, load_path):
     for layer_index in range(len(layers)):
         print("layer", layer_index)
         layer = layers[layer_index]
-        quant_layer = torch.load(load_path + str(layer_index) + ".pth", map_location="cpu")
+        quant_layer = torch.load(os.path.join(load_path, str(layer_index) + ".pth"), map_location="cpu")
         layers[layer_index] = load_linear_layers(layer, quant_layer)
     model.load_state_dict(torch.load(load_path + "/not_quantized_weights.pt"), strict=False)
     return model
@@ -183,9 +184,9 @@ def load_dequantized_model(model, load_path):
 def load_quantized_model(model, load_path):
     """Load quantized model"""
 
-    for i in range(len(model.model.layers)):
-        print(model.model.layers[i].input_layernorm.weight.device)
-        model.model.layers[i] = torch.load(load_path + str(i) + ".pth",
-                                           map_location=model.model.layers[i].input_layernorm.weight.device)
-    model.load_state_dict(torch.load(load_path + "/not_quantized_weights.pt"), strict=False)
+    for layer_index in range(len(model.model.layers)):
+        print(model.model.layers[layer_index].input_layernorm.weight.device)
+        model.model.layers[layer_index] = torch.load(os.path.join(load_path, str(layer_index) + ".pth"),
+                                           map_location=model.model.layers[layer_index].input_layernorm.weight.device)
+    model.load_state_dict(torch.load(os.path.join(load_path, "/not_quantized_weights.pt")), strict=False)
     return model
