@@ -65,6 +65,7 @@ class PredictorHiggsCache(transformers.cache_utils.Cache):
     def __init__(self, *, config: transformers.PretrainedConfig, make_quantized_cache: callable, min_buffer_size: int,
                  save_dequantized_values: bool = False):
         super().__init__()
+        raise NotImplementedError()
         self.make_quantized_cache = make_quantized_cache
         self.save_dequantized_values = save_dequantized_values
         self.config = config

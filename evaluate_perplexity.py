@@ -19,6 +19,7 @@ def evaluate_perplexity(
         cache_factory: Optional[Callable[[], DynamicCache]] = None
         ) -> float:
     """Perplexity evaluation as per https://github.com/IST-DASLab/gptq (standard among quantization research)"""
+    raise NotImplementedError()
     if step_size is None:
         step_size = seqlen
     inps = [data[:, start : start + seqlen]
