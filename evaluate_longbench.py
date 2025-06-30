@@ -12,12 +12,10 @@ from tqdm import tqdm
 import numpy as np
 import random
 import argparse
-from functools import partial
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from LongBench.llama_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
-from LongBench.custom_cache import get_aqua_cache
 from LongBench.eval import collect_all_results
 
 QUANT_BITS = 1
