@@ -75,11 +75,7 @@ def find_free_port():
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default=None, choices=MODELS)
-    parser.add_argument('--quantize', action='store_true')
     parser.add_argument('--out_path', type=str, default="./pred", help="save predictions to this path")
-    parser.add_argument("--edenn_d", type=int, default=None, help="HIGGS quantizer group dimension")
-    parser.add_argument("--edenn_n", type=int, default=None, help="HIGGS quantizer lattice size")
-    parser.add_argument("--hadamard_groupsize", type=int, default=None)
     parser.add_argument("--prefix_size", type=int, default=4,
                         help="The number of first tokens that will not be quantized, because of attention sink.")
     parser.add_argument("--recent_buffer_size", type=int, default=128,
@@ -131,7 +127,7 @@ def post_process(response, model_name):
     return response
 
 
-def get_pred(rank, world_size, data, max_length, max_gen, prompt_format, dataset, model_name, model2path, out_path, cache):
+def get_pred(rank, world_size, data, max_length, max_gen, prompt_format, dataset, model_name, model2path, out_path):
     free_port = find_free_port()
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = str(free_port)
@@ -168,7 +164,6 @@ def get_pred(rank, world_size, data, max_length, max_gen, prompt_format, dataset
                 temperature=1.0,
                 min_length=context_length+1,
                 eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
-                past_key_values=cache(device),
                 use_cache=True
             )[0]
         else:
@@ -178,7 +173,6 @@ def get_pred(rank, world_size, data, max_length, max_gen, prompt_format, dataset
                 num_beams=1,
                 do_sample=False,
                 temperature=1.0,
-                past_key_values=cache(device),
                 use_cache=True
             )[0]
         pred = tokenizer.decode(output[context_length:], skip_special_tokens=True)
@@ -259,9 +253,6 @@ if __name__ == '__main__':
     world_size = 1
     mp.set_start_method('spawn', force=True)
 
-    if args.quantize != (args.edenn_n is not None or args.edenn_d is not None):
-        raise RuntimeError(f"--quantize is {args.quantize}, but {args.edenn_n=} and {args.edenn_d=}")
-
     model2path = json.load(open("LongBench/config/model2path.json", "r"))
     model2maxlen = json.load(open("LongBench/config/model2maxlen.json", "r"))
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -301,36 +292,10 @@ if __name__ == '__main__':
         data_all = [data_sample for data_sample in data]
         data_subsets = [data_all[i::world_size] for i in range(world_size)]
         processes = []
-
-        if args.quantize:
-            custom_quantization = True
-            if args.predictors_input_path:
-                key_values = torch.load(args.predictors_input_path, weights_only=False)
-                key_predictors, value_predictors = key_values["key_predictors"], key_values["value_predictors"]
-            else:
-                key_predictors = None
-                value_predictors = None
-
-            cache = partial(get_aqua_cache,
-                            hadamard_groupsize=args.hadamard_groupsize,
-                            edenn_n=args.edenn_n,
-                            edenn_d=args.edenn_d,
-                            recent_buffer_size=args.recent_buffer_size,
-                            prefix_size=args.prefix_size,
-                            config=transformers.AutoConfig.from_pretrained(model2path[model_name]),
-                            key_predictors=key_predictors,
-                            value_predictors=value_predictors,
-                            quantizer_type="higgs",
-                            not_quantize_first_layer=args.not_quantize_first_layer
-                            )
-        else:
-            custom_quantization = False
-            cache = lambda _device: transformers.DynamicCache()
-
         for rank in range(world_size):
             p = mp.Process(target=get_pred, args=(
                 rank, world_size, data_subsets[rank], max_length, max_gen, prompt_format, dataset,
-                model_name, model2path, out_path, cache))
+                model_name, model2path, out_path))
             p.start()
             processes.append(p)
         for p in processes:
