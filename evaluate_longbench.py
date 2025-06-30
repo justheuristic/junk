@@ -325,7 +325,7 @@ if __name__ == '__main__':
                             )
         else:
             custom_quantization = False
-            cache = None
+            cache = lambda _device: transformers.DynamicCache()
 
         for rank in range(world_size):
             p = mp.Process(target=get_pred, args=(
