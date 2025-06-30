@@ -200,13 +200,15 @@ def load_model_and_tokenizer(path, model_name, device):
         replace_llama_attn_with_flash_attn()
         tokenizer = LlamaTokenizer.from_pretrained(path)
         model = LlamaForCausalLM.from_pretrained(path, torch_dtype=torch.bfloat16)
-    elif "llama-3.1" in model_name or "llama-3.2" in model_name or "Qwen" in model_name:
+    elif "llama-3.1" in model_name or "llama-3.2" in model_name:
         model = LlamaForCausalLMWithInputPartitioningForGenerationOnly.from_pretrained(
             path,
             trust_remote_code=True,
             torch_dtype=torch.bfloat16  # float16
         ).to(device)
         tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+    elif "Qwen" in model_name:
+        raise NotImplementedError(f"Ask DenisK about fixing qwen")
     else:
         raise NotImplementedError(f"Could not load {model_name}")
 
@@ -227,6 +229,7 @@ class LlamaForCausalLMWithInputPartitioningForGenerationOnly(transformers.LlamaF
         for key, value in kwargs.items():
             assert (key in self.TENSOR_KEYS) == isinstance(value, torch.Tensor), (key, kwargs)
         input_len = kwargs['input_ids'].shape[1]
+        assert len(range(0, input_len, self.chunk_size_tokens)) == 1, "todo fix chunking with reencoder"
         start_position = kwargs['cache_position'][0].item()
         last_logits = None
         for chunk_start in range(0, input_len, self.chunk_size_tokens):
